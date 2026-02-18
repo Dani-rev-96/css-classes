@@ -7,8 +7,8 @@
 
 **css-classes-lsp** is a Language Server Protocol (LSP) server that enables navigation from CSS class name usage in template files to their definitions in CSS/SCSS stylesheets.
 
-- **Transport**: stdio (standard for Neovim LSP)
-- **Target Editor**: Neovim 0.11.6+
+- **Transport**: stdio (Neovim LSP) / IPC (VS Code extension)
+- **Target Editors**: VS Code 1.80+, Neovim 0.11.6+
 - **Runtime**: Node.js >= 20
 - **Language**: TypeScript (ES2022, Node16 modules)
 
@@ -40,6 +40,7 @@
 - [x] File watcher integration for CSS/SCSS changes
 - [x] Document save handler for re-indexing + diagnostics publishing
 - [x] Document open handler for diagnostics publishing
+- [x] **VS Code extension** (LanguageClient, contributes.configuration, esbuild bundling, launch.json debugging)
 - [x] Neovim 0.11+ setup documentation
 - [x] Test suite: 89 tests across 9 test files — all passing
 - [x] Test fixtures (CSS, SCSS/BEM, SCSS imports/partials, HTML, Vue, React/TSX)
@@ -77,7 +78,9 @@ The parsers use a hand-written approach:
 
 ```
 src/
-├── server.ts              # LSP entry point — stdio connection, lifecycle
+├── extension.ts           # VS Code extension client — LanguageClient setup,
+│                            config forwarding from cssClasses.* settings
+├── server.ts              # LSP entry point — stdio/IPC connection, lifecycle
 ├── config.ts              # Merges user config with DEFAULT_CONFIG
 ├── types.ts               # All shared interfaces and DEFAULT_CONFIG
 ├── core/

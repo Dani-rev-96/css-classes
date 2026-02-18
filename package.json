@@ -1,9 +1,31 @@
 {
   "name": "css-classes-lsp",
+  "displayName": "CSS Classes",
   "version": "0.1.0",
   "description": "Language Server for CSS class name navigation — jump from class usage to definition. Supports HTML, Vue, React, CSS/SCSS with nesting and BEM.",
+  "publisher": "cssclasses",
   "author": "Daniel",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "css",
+    "scss",
+    "class",
+    "go-to-definition",
+    "lsp",
+    "bem",
+    "html",
+    "vue",
+    "react"
+  ],
   "type": "module",
   "main": "dist/extension.js",
   "bin": {
@@ -11,7 +33,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "watch": "tsc -p tsconfig.build.json --watch",
+    "build:watch": "tsc -p tsconfig.build.json --watch",
+    "vscode:prepublish": "npm run package",
+    "package": "node esbuild.mjs --production",
+    "vsix": "npm run package && vsce package --no-dependencies --allow-missing-repository --no-update-package-json --no-git-tag-version --baseContentUrl .",
+    "watch": "node esbuild.mjs --watch",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",
@@ -28,17 +54,97 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.109.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "engines": {
     "node": ">=20.0.0",
-		"vscode": "^1.80.0"
+    "vscode": "^1.109.0"
   },
-  "activationEvents": ["onLanguage:css", "onLanguage:scss", "onLanguage:typescriptreact", "onLanguage:javascriptreact", "onLanguage:html", "onLanguage:vue"],
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ]
+  "activationEvents": [],
+  "contributes": {
+    "configuration": {
+      "title": "CSS Classes",
+      "properties": {
+        "cssClasses.includePatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/*.css", "**/*.scss"],
+          "description": "Glob patterns for CSS/SCSS files to index."
+        },
+        "cssClasses.excludePatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.git/**"],
+          "description": "Glob patterns to exclude from indexing."
+        },
+        "cssClasses.languages.html": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable HTML class attribute parsing."
+        },
+        "cssClasses.languages.vue": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Vue :class and v-bind:class parsing."
+        },
+        "cssClasses.languages.react": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable React className parsing (clsx, CSS Modules, etc.)."
+        },
+        "cssClasses.extensions.html": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [".html", ".htm"],
+          "description": "File extensions treated as HTML."
+        },
+        "cssClasses.extensions.vue": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [".vue"],
+          "description": "File extensions treated as Vue."
+        },
+        "cssClasses.extensions.react": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [".jsx", ".tsx"],
+          "description": "File extensions treated as React."
+        },
+        "cssClasses.extensions.css": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [".css", ".scss"],
+          "description": "Stylesheet file extensions to index."
+        },
+        "cssClasses.bemEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable BEM pattern detection (block__element--modifier)."
+        },
+        "cssClasses.bemSeparators.element": {
+          "type": "string",
+          "default": "__",
+          "description": "BEM element separator."
+        },
+        "cssClasses.bemSeparators.modifier": {
+          "type": "string",
+          "default": "--",
+          "description": "BEM modifier separator."
+        },
+        "cssClasses.scssNesting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Resolve SCSS & nesting to full class names."
+        },
+        "cssClasses.searchEmbeddedStyles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Index <style> blocks in Vue and HTML files."
+        }
+      }
+    }
+  }
 }

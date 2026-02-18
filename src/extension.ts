@@ -1,5 +1,5 @@
-import * as vscode from "vscode";
 import * as path from "path";
+import * as vscode from "vscode";
 import {
 	LanguageClient,
 	LanguageClientOptions,
@@ -8,26 +8,24 @@ import {
 } from "vscode-languageclient/node.js";
 
 let client: LanguageClient | undefined;
+let outputChannel: vscode.OutputChannel;
 
 export async function activate(ctx: vscode.ExtensionContext) {
-	const cfg = vscode.workspace.getConfiguration("devLsp");
-	const serverPath = cfg.get<string>("serverPath");
+	outputChannel = vscode.window.createOutputChannel("CSS Classes");
+	ctx.subscriptions.push(outputChannel);
 
-	if (!serverPath) {
-		vscode.window.showWarningMessage("devLsp.serverPath is not set.");
-		return;
-	}
+	const serverModule = ctx.asAbsolutePath(path.join("dist", "server.js"));
+	outputChannel.appendLine(`Server module: ${serverModule}`);
 
 	const serverOptions: ServerOptions = {
 		run: {
-			command: "node",
-			args: [serverPath, "--stdio"],
-			transport: TransportKind.stdio,
+			module: serverModule,
+			transport: TransportKind.ipc,
 		},
 		debug: {
-			command: "node",
-			args: ["--inspect=6009", serverPath, "--stdio"],
-			transport: TransportKind.stdio,
+			module: serverModule,
+			transport: TransportKind.ipc,
+			options: { execArgv: ["--nolazy", "--inspect=6009"] },
 		},
 	};
 
@@ -40,20 +38,46 @@ export async function activate(ctx: vscode.ExtensionContext) {
 			{ scheme: "file", language: "html" },
 			{ scheme: "file", language: "vue" },
 		],
-		// wichtig falls Monorepo: root an Workspace binden
-		workspaceFolder: vscode.workspace.workspaceFolders?.[0],
+		outputChannel,
+		initializationOptions: getSettings(),
+		synchronize: {
+			configurationSection: "cssClasses",
+		},
 	};
 
 	client = new LanguageClient(
-		"devLspClient",
-		"Dev LSP Client",
+		"cssClassesLsp",
+		"CSS Classes LSP",
 		serverOptions,
 		clientOptions,
 	);
-	client.start();
+
 	ctx.subscriptions.push(client);
+	await client.start();
+	outputChannel.appendLine("CSS Classes LSP client started.");
+}
+
+/**
+ * Read VS Code settings under the "cssClasses" namespace and return them
+ * as a plain object for the server's initializationOptions.
+ */
+function getSettings(): Record<string, unknown> {
+	const cfg = vscode.workspace.getConfiguration("cssClasses");
+	return {
+		includePatterns: cfg.get("includePatterns"),
+		excludePatterns: cfg.get("excludePatterns"),
+		languages: cfg.get("languages"),
+		extensions: cfg.get("extensions"),
+		bemEnabled: cfg.get("bemEnabled"),
+		bemSeparators: cfg.get("bemSeparators"),
+		scssNesting: cfg.get("scssNesting"),
+		searchEmbeddedStyles: cfg.get("searchEmbeddedStyles"),
+	};
 }
 
 export async function deactivate() {
-	await client?.stop();
+	if (client) {
+		await client.stop();
+		client = undefined;
+	}
 }

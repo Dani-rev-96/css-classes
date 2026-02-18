@@ -69,27 +69,38 @@ A Language Server for CSS class name navigation. Jump from class usage in HTML, 
 
 // SCSS nesting with BEM
 .card {
-  &__header {
-    &--highlighted {
-    }
-  }
-  &--featured {
-  }
+	&__header {
+		&--highlighted {
+		}
+	}
+	&--featured {
+	}
 }
 ```
 
 ## Installation
 
+### VS Code
+
+Install from the VS Code Marketplace, or package locally:
+
 ```bash
 npm install
-npm run build
+npm run package          # esbuild production bundle
+npx @vscode/vsce package  # creates .vsix
+code --install-extension css-classes-lsp-*.vsix
 ```
 
-## Usage with Neovim
+The extension activates automatically for CSS, SCSS, HTML, Vue, and React files. All settings live under `cssClasses.*` in VS Code settings.
+
+### Neovim
 
 See [neovim/README.md](neovim/README.md) for detailed Neovim 0.11+ setup instructions.
 
-Quick setup:
+```bash
+npm install
+npm run build  # tsc build for standalone server
+```
 
 ```lua
 -- ~/.config/nvim/lsp/css_classes.lua
@@ -129,14 +140,18 @@ All settings are optional. Pass them via `initializationOptions` or `settings.cs
 
 ```
 src/
-├── server.ts              # LSP server entry point (stdio transport)
+├── extension.ts           # VS Code extension client (LanguageClient)
+├── server.ts              # LSP server entry point (stdio + IPC transport)
 ├── config.ts              # Configuration resolution
 ├── types.ts               # Shared type definitions
 ├── core/
 │   ├── css-index.ts       # In-memory class definition index
 │   ├── definition.ts      # Go-to-definition logic
 │   ├── hover.ts           # Hover provider
-│   └── completion.ts      # Completion provider
+│   ├── completion.ts      # Completion provider
+│   ├── references.ts      # Find all references provider
+│   ├── diagnostics.ts     # Undefined class warnings
+│   └── workspace-symbols.ts # Workspace symbol search
 ├── parsers/
 │   ├── css-parser.ts      # CSS/SCSS parser (nesting + BEM)
 │   ├── html-parser.ts     # HTML class="" parser
@@ -147,16 +162,27 @@ src/
 └── utils/
     ├── bem.ts             # BEM parsing utilities
     └── position.ts        # Position/offset conversion utilities
+esbuild.mjs                # Bundles extension + server for VS Code
 ```
 
 ## Development
 
 ```bash
 npm install
-npm test          # Run tests
-npm run watch     # TypeScript watch mode
-npm run build     # Production build
+npm test            # Run tests
+npm run watch       # esbuild watch (VS Code extension)
+npm run build:watch # tsc watch (standalone server)
+npm run build       # tsc production build (standalone)
+npm run package     # esbuild production bundle (VS Code)
 ```
+
+### Debugging the VS Code Extension
+
+Press **F5** in VS Code to launch an Extension Development Host with the extension loaded. The `.vscode/launch.json` provides two configurations:
+
+- **Run Extension** — launches the extension host with esbuild watch
+- **Attach to Server** — attaches to the LSP server on port 6009
+- **Extension + Server** — compound launch for both
 
 ## License
 
