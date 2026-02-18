@@ -1,0 +1,12 @@
+@use 'variables';
+@use 'mixins' as m;
+@forward 'typography';
+
+.imported-component {
+  color: var(--primary);
+}
+
+.used-mixin {
+  @include m.respond-to(medium);
+  padding: 1rem;
+}

@@ -1,0 +1,36 @@
+/* Base styles */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  background: #333;
+  color: white;
+}
+
+.header .nav {
+  display: flex;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 4px;
+}
+
+.btn.active {
+  background: blue;
+}
+
+.card, .panel {
+  border: 1px solid #ccc;
+  border-radius: 8px;
+}
+
+.hidden {
+  display: none;
+}
+
+.text-center {
+  text-align: center;
+}

@@ -1,0 +1,83 @@
+// BEM-style SCSS with nesting
+
+.card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+
+  &__header {
+    padding: 16px;
+    border-bottom: 1px solid #eee;
+
+    &--highlighted {
+      background: yellow;
+    }
+  }
+
+  &__body {
+    padding: 16px;
+  }
+
+  &__footer {
+    padding: 16px;
+    border-top: 1px solid #eee;
+  }
+
+  &--featured {
+    border-color: gold;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+
+  &--compact {
+    .card__header, .card__footer {
+      padding: 8px;
+    }
+  }
+}
+
+.nav {
+  display: flex;
+
+  &__item {
+    padding: 8px 16px;
+
+    &--active {
+      font-weight: bold;
+      color: blue;
+    }
+
+    &--disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+  }
+
+  &__separator {
+    width: 1px;
+    background: #ccc;
+  }
+
+  &--vertical {
+    flex-direction: column;
+  }
+}
+
+// Deeper nesting example
+.sidebar {
+  width: 250px;
+
+  .menu {
+    list-style: none;
+
+    &__item {
+      padding: 4px 8px;
+
+      &--selected {
+        background: #f0f0f0;
+      }
+
+      .icon {
+        margin-right: 8px;
+      }
+    }
+  }
+}
