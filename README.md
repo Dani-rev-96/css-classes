@@ -95,20 +95,29 @@ The extension activates automatically for CSS, SCSS, HTML, Vue, and React files.
 
 ### Neovim
 
-See [neovim/README.md](neovim/README.md) for detailed Neovim 0.11+ setup instructions.
+See [neovim/README.md](neovim/README.md) for detailed setup instructions.
 
-```bash
-npm install
-npm run build  # tsc build for standalone server
-```
+**Lazy.nvim** (quickest):
 
 ```lua
--- ~/.config/nvim/lsp/css_classes.lua
-return {
-  cmd = { 'node', '/path/to/css-classes/dist/server.js', '--stdio' },
-  filetypes = { 'html', 'vue', 'javascriptreact', 'typescriptreact', 'css', 'scss' },
-  root_markers = { 'package.json', '.git' },
+{
+  'Dani-rev-96/css-classes',
+  build = 'npm install && npm run build',
+  config = function()
+    vim.lsp.enable('css_classes')
+  end,
 }
+```
+
+**Nix Flake**:
+
+```nix
+# flake input: css-classes.url = "github:Dani-rev-96/css-classes";
+# As a Neovim plugin (includes pre-built server):
+programs.neovim.plugins = [ css-classes.packages.${system}.vimPlugin ];
+
+# Or as a standalone binary:
+environment.systemPackages = [ css-classes.packages.${system}.default ];
 ```
 
 ```lua
