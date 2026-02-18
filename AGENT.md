@@ -45,12 +45,12 @@
 - [x] Test suite: 89 tests across 9 test files — all passing
 - [x] Test fixtures (CSS, SCSS/BEM, SCSS imports/partials, HTML, Vue, React/TSX)
 - [x] BEM-part-aware go-to-definition (jump to block, element, or modifier separately based on cursor position; configurable via `bemDefinitionParts`)
+- [x] **SCSS `@extend`, `@mixin`, `@include` awareness** — parses directives, indexes relationships, shows `@extend` info in hover
+- [x] **Rename provider** (rename class across templates + stylesheets via `textDocument/rename` with `prepareRename` support)
+- [x] **Sourcemap support for CSS-in-JS** — resolves generated CSS positions back to original source via V3 source maps (inline + external)
 
 ### Not Yet Implemented
 
-- [ ] SCSS `@extend`, `@mixin`, `@include` awareness
-- [ ] Rename provider (rename class across templates + stylesheets)
-- [ ] Sourcemap support for CSS-in-JS
 - [ ] Performance optimization for very large projects (>10k CSS files)
 - [ ] Less/Sass (indented syntax) support
 - [ ] Svelte class:directive support
@@ -93,10 +93,12 @@ src/
 │   ├── references.ts      # getReferences() — class → all usages across workspace
 │   ├── diagnostics.ts     # getDiagnostics() — undefined class warnings
 │   ├── workspace-symbols.ts # getWorkspaceSymbols() — search definitions
+│   ├── rename.ts          # getRename() — collect all edits for class rename
 │   └── import-resolver.ts # extractImports(), resolveImportPath() — @import/@use/@forward
 ├── parsers/
 │   ├── css-parser.ts      # parseCssClasses() — handles nesting, &, BEM
 │   │                        extractStyleBlocks() — <style> extraction
+│   │                        parseScssDirectives() — @mixin/@extend/@include extraction
 │   ├── html-parser.ts     # parseHtmlClasses() — class="..." extraction (full-content)
 │   ├── vue-parser.ts      # parseVueClasses() — static + dynamic :class (full-content)
 │   └── react-parser.ts    # parseReactClasses() — className, clsx, CSS Modules, template literals
@@ -104,7 +106,8 @@ src/
 │   └── workspace-scanner.ts  # scanWorkspace(), scanTemplateFiles(), readFileContent()
 └── utils/
     ├── bem.ts             # parseBem(), isBem(), bemParents()
-    └── position.ts        # positionToOffset(), offsetToPosition(), getWordAtOffset()
+    ├── position.ts        # positionToOffset(), offsetToPosition(), getWordAtOffset()
+    └── sourcemap.ts       # parseSourceMap(), resolveOriginalPosition(), findSourceMap()
 ```
 
 ## Key Design Decisions
@@ -131,7 +134,7 @@ src/
 | References        | `textDocument/references`         | ✅     |
 | Workspace Symbols | `workspace/symbol`                | ✅     |
 | Diagnostics       | `textDocument/publishDiagnostics` | ✅     |
-| Rename            | `textDocument/rename`             | ❌     |
+| Rename            | `textDocument/rename`             | ✅     |
 | Code Actions      | `textDocument/codeAction`         | ❌     |
 
 ## File Dependencies
@@ -139,10 +142,11 @@ src/
 ```
 server.ts → config.ts, types.ts, core/*, scanner/*, parsers/*
 core/definition.ts → core/css-index.ts, parsers/*, scanner/*, utils/*
-core/css-index.ts → parsers/css-parser.ts, scanner/*, core/import-resolver.ts
+core/css-index.ts → parsers/css-parser.ts, scanner/*, core/import-resolver.ts, utils/sourcemap.ts
 core/references.ts → parsers/*, scanner/*
 core/diagnostics.ts → core/css-index.ts
 core/workspace-symbols.ts → core/css-index.ts
+core/rename.ts → parsers/*, scanner/*, core/css-index.ts
 core/import-resolver.ts → scanner/workspace-scanner.ts
 parsers/css-parser.ts → types.ts, utils/bem.ts
 parsers/vue-parser.ts → types.ts, parsers/html-parser.ts
@@ -150,6 +154,7 @@ parsers/react-parser.ts → types.ts
 parsers/html-parser.ts → types.ts
 utils/bem.ts → types.ts
 utils/position.ts → (standalone)
+utils/sourcemap.ts → types.ts
 config.ts → types.ts
 ```
 
@@ -160,17 +165,20 @@ npm test              # Run all tests
 npm run test:watch    # Watch mode
 ```
 
-**89 tests** across 9 test files:
+**142 tests** across 12 test files:
 
 - `test/css-parser.test.ts` — CSS parsing, SCSS nesting, BEM detection, style extraction (16)
 - `test/html-parser.test.ts` — HTML class attribute extraction, positions (7)
-- `test/vue-parser.test.ts` — Static, object, array, string, v-bind:class (8)
+- `test/vue-parser.test.ts` — Static, object, array, string, v-bind:class (10)
 - `test/react-parser.test.ts` — className, clsx, classNames, cn, CSS Modules, template literals (10)
-- `test/bem.test.ts` — BEM parsing, detection, parent resolution (14)
-- `test/config.test.ts` — Config merging, defaults, type validation (6)
+- `test/bem.test.ts` — BEM parsing, detection, parent resolution (25)
+- `test/config.test.ts` — Config merging, defaults, type validation (8)
 - `test/import-resolver.test.ts` — @import/@use/@forward extraction, SCSS partial resolution (13)
 - `test/diagnostics.test.ts` — Undefined class warnings, duplicate definition detection (7)
 - `test/workspace-symbols.test.ts` — Prefix/contains/fuzzy matching, limits (8)
+- `test/scss-directives.test.ts` — @mixin, @extend, @include parsing and context resolution (16)
+- `test/rename.test.ts` — Rename across CSS definitions and template references (7)
+- `test/sourcemap.test.ts` — V3 source map parsing, VLQ decoding, position resolution (15)
 
 ## Build & Run
 

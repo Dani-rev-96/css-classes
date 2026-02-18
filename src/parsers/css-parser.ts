@@ -1,4 +1,4 @@
-import type { CssClassDefinition, CssClassesConfig } from "../types.js";
+import type { CssClassDefinition, CssClassesConfig, ScssDirectives, ScssMixin, ScssExtend, ScssInclude } from "../types.js";
 import { parseBem } from "../utils/bem.js";
 
 /**
@@ -263,4 +263,186 @@ export function extractStyleBlocks(
   }
 
   return blocks;
+}
+
+/**
+ * Parse SCSS directives (@extend, @mixin, @include) from SCSS/CSS content.
+ *
+ * Uses a two-pass approach:
+ *  1. Track scope context (selector nesting) to know the current class context
+ *  2. Extract directive statements within each scope
+ */
+export function parseScssDirectives(
+  content: string,
+  filePath: string,
+): ScssDirectives {
+  const mixins: ScssMixin[] = [];
+  const extends_: ScssExtend[] = [];
+  const includes: ScssInclude[] = [];
+
+  const lines = content.split("\n");
+
+  // Track nesting to determine current class context
+  const scopeStack: string[] = []; // stack of current selector contexts
+  let inComment = false;
+  let inLineComment = false;
+  let inString: string | false = false;
+  let selectorBuffer = "";
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
+    inLineComment = false;
+
+    // Check for directives in the raw line (before state-machine processing)
+    const trimmedLine = line.trim();
+
+    // Skip if we're in a block comment at the start of line processing
+    // (we'll check more precisely with the state machine)
+    if (!inComment && !inString) {
+      // @mixin name($param1, $param2)
+      const mixinMatch = trimmedLine.match(
+        /^@mixin\s+([\w-]+)\s*(?:\(([^)]*)\))?\s*\{?\s*$/,
+      );
+      if (mixinMatch) {
+        const name = mixinMatch[1];
+        const paramsStr = mixinMatch[2] || "";
+        const parameters = paramsStr
+          .split(",")
+          .map((p) => p.trim().replace(/^\$/, "").replace(/:.*$/, "").trim())
+          .filter((p) => p.length > 0);
+
+        mixins.push({
+          name,
+          filePath,
+          line: lineIdx,
+          column: line.indexOf("@mixin"),
+          parameters,
+        });
+      }
+
+      // @extend .class-name
+      const extendMatch = trimmedLine.match(/^@extend\s+\.([\w-]+)\s*;?\s*$/);
+      if (extendMatch) {
+        const targetClassName = extendMatch[1];
+        // Determine current class context from scope stack
+        const sourceClassName = getCurrentClassContext(scopeStack);
+
+        extends_.push({
+          targetClassName,
+          sourceClassName: sourceClassName ?? "(unknown)",
+          filePath,
+          line: lineIdx,
+          column: line.indexOf("@extend"),
+        });
+      }
+
+      // @include mixin-name or @include mixin-name(args)
+      // Also handles namespaced: @include ns.mixin-name(args)
+      const includeMatch = trimmedLine.match(
+        /^@include\s+([\w.-]+)\s*(?:\([^)]*\))?\s*;?\s*$/,
+      );
+      if (includeMatch) {
+        const mixinName = includeMatch[1];
+        const contextClassName = getCurrentClassContext(scopeStack);
+
+        includes.push({
+          mixinName,
+          contextClassName,
+          filePath,
+          line: lineIdx,
+          column: line.indexOf("@include"),
+        });
+      }
+    }
+
+    // State machine for tracking nesting depth (same logic as parseCssClasses)
+    for (let col = 0; col < line.length; col++) {
+      const ch = line[col];
+      const next = col + 1 < line.length ? line[col + 1] : "";
+
+      if (inString) {
+        if (ch === inString && (col === 0 || line[col - 1] !== "\\")) {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (inComment) {
+        if (ch === "*" && next === "/") {
+          inComment = false;
+          col++;
+        }
+        continue;
+      }
+
+      if (inLineComment) continue;
+
+      if (ch === "/" && next === "*") {
+        inComment = true;
+        col++;
+        continue;
+      }
+
+      if (ch === "/" && next === "/") {
+        inLineComment = true;
+        continue;
+      }
+
+      if (ch === '"' || ch === "'") {
+        inString = ch;
+        continue;
+      }
+
+      if (ch === "{") {
+        const rawSelector = selectorBuffer.trim();
+        selectorBuffer = "";
+        scopeStack.push(rawSelector);
+      } else if (ch === "}") {
+        selectorBuffer = "";
+        if (scopeStack.length > 0) {
+          scopeStack.pop();
+        }
+      } else if (ch === ";") {
+        selectorBuffer = "";
+      } else {
+        selectorBuffer += ch;
+      }
+    }
+
+    if (selectorBuffer.length > 0 && !inComment) {
+      selectorBuffer += " ";
+    }
+  }
+
+  return {
+    mixins,
+    extends: extends_,
+    includes,
+  };
+}
+
+/**
+ * Determine the current class name context from the scope stack.
+ * Returns the most recent class-like selector, resolving & nesting.
+ */
+function getCurrentClassContext(scopeStack: string[]): string | null {
+  // Walk the scope stack from inside out to find the nearest class selector
+  for (let i = scopeStack.length - 1; i >= 0; i--) {
+    const selector = scopeStack[i];
+    // Extract class names from the selector
+    const classMatch = selector.match(/\.(-?[_a-zA-Z][-\w]*)/);
+    if (classMatch) {
+      // If it contains &, try to resolve with parent
+      if (selector.includes("&") && i > 0) {
+        const parentCtx = getCurrentClassContext(scopeStack.slice(0, i));
+        if (parentCtx) {
+          const resolved = selector.replace(/&/g, "." + parentCtx);
+          const resolvedMatch = resolved.match(/\.(-?[_a-zA-Z][-\w]*)/);
+          if (resolvedMatch) return resolvedMatch[1];
+        }
+      }
+      return classMatch[1];
+    }
+  }
+  return null;
 }

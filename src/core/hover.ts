@@ -37,6 +37,20 @@ export function getHover(
     lines.push(`- ... and ${defs.length - 5} more`);
   }
 
+  // Show @extend info
+  const extenders = index.lookupExtenders(className);
+  if (extenders.length > 0) {
+    lines.push("");
+    lines.push(`**Extended by:**`);
+    for (const ext of extenders.slice(0, 5)) {
+      const shortPath = ext.filePath.split("/").slice(-2).join("/");
+      lines.push(`- \`.${ext.sourceClassName}\` in \`${shortPath}\` line ${ext.line + 1}`);
+    }
+    if (extenders.length > 5) {
+      lines.push(`- ... and ${extenders.length - 5} more`);
+    }
+  }
+
   return {
     className,
     contents: lines.join("\n"),

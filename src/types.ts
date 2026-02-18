@@ -29,6 +29,78 @@ export interface BemParts {
 }
 
 /**
+ * Represents SCSS directives (@extend, @mixin, @include) found in a stylesheet.
+ */
+export interface ScssDirectives {
+  /** Mixin definitions found in the file */
+  mixins: ScssMixin[];
+  /** @extend relationships */
+  extends: ScssExtend[];
+  /** @include usages */
+  includes: ScssInclude[];
+}
+
+/**
+ * A @mixin definition in SCSS.
+ */
+export interface ScssMixin {
+  /** Mixin name */
+  name: string;
+  /** Absolute file path */
+  filePath: string;
+  /** Zero-based line */
+  line: number;
+  /** Zero-based column */
+  column: number;
+  /** Parameter names (without $ prefix) */
+  parameters: string[];
+}
+
+/**
+ * An @extend relationship: source class extends target class.
+ */
+export interface ScssExtend {
+  /** The class being extended (e.g. "bar" from @extend .bar) */
+  targetClassName: string;
+  /** The class that contains the @extend statement */
+  sourceClassName: string;
+  /** Absolute file path */
+  filePath: string;
+  /** Zero-based line */
+  line: number;
+  /** Zero-based column */
+  column: number;
+}
+
+/**
+ * An @include usage of a mixin.
+ */
+export interface ScssInclude {
+  /** The mixin name */
+  mixinName: string;
+  /** The class context where @include appears (null if at root) */
+  contextClassName: string | null;
+  /** Absolute file path */
+  filePath: string;
+  /** Zero-based line */
+  line: number;
+  /** Zero-based column */
+  column: number;
+}
+
+/**
+ * Represents a source map mapping for CSS-in-JS support.
+ */
+export interface SourceMapMapping {
+  /** The original source file path */
+  originalFilePath: string;
+  /** Zero-based original line */
+  originalLine: number;
+  /** Zero-based original column */
+  originalColumn: number;
+}
+
+/**
  * Represents a class name reference found in a template file (HTML/Vue/React).
  */
 export interface CssClassReference {

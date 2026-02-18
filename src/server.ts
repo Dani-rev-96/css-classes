@@ -26,6 +26,10 @@ import {
 	SymbolKind,
 	DiagnosticSeverity,
 	Diagnostic as LSPDiagnostic,
+	RenameParams,
+	TextEdit,
+	WorkspaceEdit,
+	PrepareRenameParams,
 } from "vscode-languageserver/node.js";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -38,6 +42,7 @@ import { getCompletions } from "./core/completion.js";
 import { getReferences } from "./core/references.js";
 import { getDiagnostics } from "./core/diagnostics.js";
 import { getWorkspaceSymbols } from "./core/workspace-symbols.js";
+import { getRename } from "./core/rename.js";
 import { resolveConfig } from "./config.js";
 import type { CssClassesConfig, CssClassReference } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
@@ -85,6 +90,9 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 			definitionProvider: true,
 			hoverProvider: true,
 			referencesProvider: true,
+			renameProvider: {
+				prepareProvider: true,
+			},
 			completionProvider: {
 				triggerCharacters: ['"', "'", " ", ".", "-", "_"],
 				resolveProvider: false,
@@ -359,6 +367,154 @@ connection.onWorkspaceSymbol(
 		}));
 	},
 );
+
+// ─── Rename ──────────────────────────────────────────────────────────────────
+
+connection.onPrepareRename(
+	(params: PrepareRenameParams): Range | null => {
+		if (!indexReady) return null;
+
+		const doc = documents.get(params.textDocument.uri);
+		if (!doc) return null;
+
+		const filePath = URI.parse(doc.uri).fsPath;
+		const content = doc.getText();
+
+		const defResult = getDefinition(
+			content,
+			filePath,
+			params.position.line,
+			params.position.character,
+			classIndex,
+			config,
+		);
+
+		if (!defResult) return null;
+
+		// Find the class reference at the cursor position to determine exact range
+		const lang = getFileLanguage(filePath, config);
+		if (!lang) return null;
+
+		if (lang === "css") {
+			// In CSS files, find the word under cursor
+			const line = doc.getText(
+				Range.create(
+					Position.create(params.position.line, 0),
+					Position.create(params.position.line + 1, 0),
+				),
+			);
+			// Find the class name in the line
+			const classPattern = new RegExp(
+				`\\.${defResult.className.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}(?![\\w-])`,
+			);
+			const match = line.match(classPattern);
+			if (match && match.index !== undefined) {
+				return Range.create(
+					Position.create(params.position.line, match.index + 1), // +1 to skip '.'
+					Position.create(
+						params.position.line,
+						match.index + 1 + defResult.className.length,
+					),
+				);
+			}
+		}
+
+		// For template files, return the range of the class name
+		return Range.create(
+			Position.create(
+				params.position.line,
+				params.position.character - findOffsetInClassName(doc, params.position, defResult.className),
+			),
+			Position.create(
+				params.position.line,
+				params.position.character - findOffsetInClassName(doc, params.position, defResult.className) + defResult.className.length,
+			),
+		);
+	},
+);
+
+connection.onRenameRequest(
+	async (params: RenameParams): Promise<WorkspaceEdit | null> => {
+		if (!indexReady || !workspaceRoot) return null;
+
+		const doc = documents.get(params.textDocument.uri);
+		if (!doc) return null;
+
+		const filePath = URI.parse(doc.uri).fsPath;
+		const content = doc.getText();
+
+		// Resolve the class name at the cursor
+		const defResult = getDefinition(
+			content,
+			filePath,
+			params.position.line,
+			params.position.character,
+			classIndex,
+			config,
+		);
+
+		if (!defResult) return null;
+
+		// Build a map of open document contents
+		const openDocuments = new Map<string, string>();
+		for (const d of documents.all()) {
+			openDocuments.set(URI.parse(d.uri).fsPath, d.getText());
+		}
+
+		const result = await getRename(
+			defResult.className,
+			workspaceRoot,
+			config,
+			classIndex,
+			openDocuments,
+		);
+
+		if (result.edits.length === 0) return null;
+
+		// Group edits by file
+		const changes: Record<string, TextEdit[]> = {};
+		for (const edit of result.edits) {
+			const uri = URI.file(edit.filePath).toString();
+			if (!changes[uri]) changes[uri] = [];
+			changes[uri].push({
+				range: Range.create(
+					Position.create(edit.line, edit.column),
+					Position.create(edit.line, edit.endColumn),
+				),
+				newText: params.newName,
+			});
+		}
+
+		return { changes };
+	},
+);
+
+/**
+ * Find the offset of the cursor within the class name.
+ */
+function findOffsetInClassName(
+	doc: TextDocument,
+	position: Position,
+	className: string,
+): number {
+	const lineText = doc.getText(
+		Range.create(
+			Position.create(position.line, 0),
+			Position.create(position.line + 1, 0),
+		),
+	);
+
+	// Search backwards from cursor position to find the start of the class name
+	const beforeCursor = lineText.slice(0, position.character);
+	const classStart = beforeCursor.lastIndexOf(className);
+
+	if (classStart >= 0 && classStart + className.length >= position.character) {
+		return position.character - classStart;
+	}
+
+	// Fallback: cursor is at the start
+	return 0;
+}
 
 // ─── Diagnostics ─────────────────────────────────────────────────────────────
 
