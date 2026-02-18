@@ -100,6 +100,13 @@ export interface CssClassesConfig {
    * @default true
    */
   searchEmbeddedStyles: boolean;
+
+  /**
+   * Respect .gitignore when scanning for files.
+   * When enabled, files matching patterns in .gitignore will be excluded.
+   * @default false
+   */
+  respectGitignore: boolean;
 }
 
 export const DEFAULT_CONFIG: CssClassesConfig = {
@@ -123,4 +130,5 @@ export const DEFAULT_CONFIG: CssClassesConfig = {
   },
   scssNesting: true,
   searchEmbeddedStyles: true,
+  respectGitignore: true,
 };

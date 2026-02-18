@@ -72,6 +72,7 @@ function getSettings(): Record<string, unknown> {
 		bemSeparators: cfg.get("bemSeparators"),
 		scssNesting: cfg.get("scssNesting"),
 		searchEmbeddedStyles: cfg.get("searchEmbeddedStyles"),
+		respectGitignore: cfg.get("respectGitignore"),
 	};
 }
 

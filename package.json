@@ -143,6 +143,11 @@
           "type": "boolean",
           "default": true,
           "description": "Index <style> blocks in Vue and HTML files."
+        },
+        "cssClasses.respectGitignore": {
+          "type": "boolean",
+          "default": true,
+          "description": "Respect .gitignore when scanning for files. Excludes files matching .gitignore patterns from indexing."
         }
       }
     }

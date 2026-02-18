@@ -31,6 +31,26 @@ describe("Vue Parser", () => {
       expect(names).toContain("active");
       expect(names).toContain("disabled");
     });
+
+    it("does not detect object values as class names", () => {
+      const vue = `<template>\n  <div :class="{ 'my-class': isEnabled }"></div>\n</template>`;
+      const refs = parseVueClasses(vue, "/test.vue");
+
+      const names = refs.map((r) => r.className);
+      expect(names).toContain("my-class");
+      expect(names).not.toContain("isEnabled");
+    });
+
+    it("does not detect boolean/variable values from :class binding", () => {
+      const vue = `<template>\n  <div :class="{ 'card': showCard, 'card--active': isActive }"></div>\n</template>`;
+      const refs = parseVueClasses(vue, "/test.vue");
+
+      const names = refs.map((r) => r.className);
+      expect(names).toContain("card");
+      expect(names).toContain("card--active");
+      expect(names).not.toContain("showCard");
+      expect(names).not.toContain("isActive");
+    });
   });
 
   describe("array syntax", () => {

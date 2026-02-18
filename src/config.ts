@@ -67,6 +67,10 @@ export function resolveConfig(
       userConfig.searchEmbeddedStyles,
       DEFAULT_CONFIG.searchEmbeddedStyles,
     ),
+    respectGitignore: asBool(
+      userConfig.respectGitignore,
+      DEFAULT_CONFIG.respectGitignore,
+    ),
   };
 }
 

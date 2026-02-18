@@ -16,7 +16,7 @@ export function parseHtmlClasses(
   const refs: CssClassReference[] = [];
 
   // Match class="..." or class='...' across the full content (multi-line aware)
-  const attrRegex = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  const attrRegex = /(?<!:)\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
   let match: RegExpExecArray | null;
 
   while ((match = attrRegex.exec(content)) !== null) {

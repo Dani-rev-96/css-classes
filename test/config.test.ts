@@ -43,4 +43,14 @@ describe("Config", () => {
     expect(config.includePatterns).toEqual(DEFAULT_CONFIG.includePatterns);
     expect(config.bemEnabled).toEqual(DEFAULT_CONFIG.bemEnabled);
   });
+
+  it("defaults respectGitignore to true", () => {
+    const config = resolveConfig();
+    expect(config.respectGitignore).toBe(true);
+  });
+
+  it("overrides respectGitignore", () => {
+    const config = resolveConfig({ respectGitignore: true });
+    expect(config.respectGitignore).toBe(true);
+  });
 });
