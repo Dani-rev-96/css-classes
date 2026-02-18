@@ -63,7 +63,14 @@
     "node": ">=20.0.0",
     "vscode": "^1.109.0"
   },
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:css",
+    "onLanguage:scss",
+    "onLanguage:html",
+    "onLanguage:vue",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascriptreact"
+  ],
   "contributes": {
     "configuration": {
       "title": "CSS Classes",

@@ -1,6 +1,6 @@
 import type { CssClassDefinition, CssClassesConfig, ScssDirectives, ScssMixin, ScssExtend, ScssInclude } from "../types.js";
 import { parseCssClasses, extractStyleBlocks, parseScssDirectives } from "../parsers/css-parser.js";
-import { scanWorkspace, readFileContent } from "../scanner/workspace-scanner.js";
+import { scanWorkspace, scanTemplateFiles, readFileContent } from "../scanner/workspace-scanner.js";
 import { resolveFileImports } from "./import-resolver.js";
 import { findSourceMap, resolveOriginalPosition } from "../utils/sourcemap.js";
 
@@ -158,6 +158,18 @@ export class CssClassIndex {
         this.indexDirectives(newFile, content);
         importQueue.push({ filePath: newFile, content });
       }
+    }
+
+    // Index embedded <style> blocks from template files (Vue, HTML, etc.)
+    if (this.config.searchEmbeddedStyles) {
+      const templateFiles = await scanTemplateFiles(workspaceRoot, this.config);
+      await Promise.all(
+        templateFiles.map(async (filePath) => {
+          const content = await readFileContent(filePath);
+          if (!content) return;
+          this.indexEmbeddedStyles(filePath, content);
+        }),
+      );
     }
   }
 

@@ -60,6 +60,61 @@ let config: CssClassesConfig = DEFAULT_CONFIG;
 let classIndex: CssClassIndex;
 let workspaceRoot: string | null = null;
 let indexReady = false;
+let indexingInProgress: Promise<void> | null = null;
+
+/**
+ * Wait for any in-progress indexing to complete.
+ * Returns true if the index is ready, false otherwise.
+ */
+async function waitForIndex(): Promise<boolean> {
+	if (indexReady) return true;
+	if (indexingInProgress) {
+		try { await indexingInProgress; } catch { /* ignore */ }
+	}
+	return indexReady;
+}
+
+/**
+ * Serialize workspace indexing to prevent concurrent indexWorkspace calls
+ * from clearing and corrupting each other's work. After indexing completes,
+ * re-publish diagnostics for all open documents.
+ */
+async function safeIndexWorkspace(): Promise<void> {
+	// If an indexing operation is already in progress, wait for it to finish
+	// then start a new one (the new config/state should take effect)
+	if (indexingInProgress) {
+		try { await indexingInProgress; } catch { /* ignore */ }
+	}
+
+	indexReady = false;
+
+	const p = (async () => {
+		if (!workspaceRoot) return;
+		await classIndex.indexWorkspace(workspaceRoot);
+	})();
+
+	indexingInProgress = p;
+
+	try {
+		await p;
+		indexReady = true;
+		connection.console.log(
+			`[css-classes-lsp] Indexed ${classIndex.size} unique classes (${classIndex.totalDefinitions} definitions)`,
+		);
+		// Re-publish diagnostics for all currently open documents
+		for (const doc of documents.all()) {
+			publishDiagnostics(doc);
+		}
+	} catch (err) {
+		connection.console.error(`[css-classes-lsp] Indexing error: ${err}`);
+		// Restore indexReady so previously indexed data (if any) can still be used
+		indexReady = true;
+	} finally {
+		if (indexingInProgress === p) {
+			indexingInProgress = null;
+		}
+	}
+}
 
 // ─── Initialization ──────────────────────────────────────────────────────────
 
@@ -123,18 +178,10 @@ connection.onInitialized(async () => {
 
 	// Initial indexing
 	if (workspaceRoot) {
-		try {
-			connection.console.log(
-				"[css-classes-lsp] Starting workspace indexing...",
-			);
-			await classIndex.indexWorkspace(workspaceRoot);
-			indexReady = true;
-			connection.console.log(
-				`[css-classes-lsp] Indexed ${classIndex.size} unique classes (${classIndex.totalDefinitions} definitions)`,
-			);
-		} catch (err) {
-			connection.console.error(`[css-classes-lsp] Indexing error: ${err}`);
-		}
+		connection.console.log(
+			"[css-classes-lsp] Starting workspace indexing...",
+		);
+		await safeIndexWorkspace();
 	}
 });
 
@@ -147,19 +194,21 @@ connection.onDidChangeConfiguration(
 			settings?.["css-classes"]) as Record<string, unknown> | undefined;
 
 		if (cssClassesSettings) {
-			config = resolveConfig(cssClassesSettings);
+			const newConfig = resolveConfig(cssClassesSettings);
+
+			// Skip re-indexing if the config hasn't actually changed
+			if (JSON.stringify(newConfig) === JSON.stringify(config)) {
+				return;
+			}
+
+			config = newConfig;
 			classIndex.updateConfig(config);
 
 			// Re-index with new config
-			if (workspaceRoot) {
-				connection.console.log(
-					"[css-classes-lsp] Config changed, re-indexing...",
-				);
-				await classIndex.indexWorkspace(workspaceRoot);
-				connection.console.log(
-					`[css-classes-lsp] Re-indexed: ${classIndex.size} classes`,
-				);
-			}
+			connection.console.log(
+				"[css-classes-lsp] Config changed, re-indexing...",
+			);
+			await safeIndexWorkspace();
 		}
 	},
 );
@@ -178,6 +227,13 @@ connection.onDidChangeWatchedFiles(
 				await classIndex.indexFile(filePath);
 			}
 		}
+
+		// CSS index changed — refresh diagnostics for all open documents
+		if (indexReady) {
+			for (const doc of documents.all()) {
+				publishDiagnostics(doc);
+			}
+		}
 	},
 );
 
@@ -185,24 +241,34 @@ connection.onDidChangeWatchedFiles(
 documents.onDidSave(async (event) => {
 	const filePath = URI.parse(event.document.uri).fsPath;
 	const lang = getFileLanguage(filePath, config);
+	let indexChanged = false;
 
 	if (lang === "css") {
 		await classIndex.indexFile(filePath, event.document.getText());
+		indexChanged = true;
 	} else if (lang === "vue" || lang === "html") {
 		if (config.searchEmbeddedStyles) {
 			classIndex.removeFile(filePath);
 			classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+			indexChanged = true;
 		}
 	}
 
-	// Publish diagnostics after re-indexing
-	publishDiagnostics(event.document);
+	// If the CSS index changed, refresh diagnostics for all open documents;
+	// otherwise just update diagnostics for the saved document.
+	if (indexChanged && indexReady) {
+		for (const doc of documents.all()) {
+			publishDiagnostics(doc);
+		}
+	} else {
+		publishDiagnostics(event.document);
+	}
 });
 
 // ─── Go to Definition ────────────────────────────────────────────────────────
 
-connection.onDefinition((params: DefinitionParams): Location[] | null => {
-	if (!indexReady) return null;
+connection.onDefinition(async (params: DefinitionParams): Promise<Location[] | null> => {
+	if (!await waitForIndex()) return null;
 
 	const doc = documents.get(params.textDocument.uri);
 	if (!doc) return null;
@@ -232,8 +298,8 @@ connection.onDefinition((params: DefinitionParams): Location[] | null => {
 
 // ─── Hover ───────────────────────────────────────────────────────────────────
 
-connection.onHover((params: HoverParams) => {
-	if (!indexReady) return null;
+connection.onHover(async (params: HoverParams) => {
+	if (!await waitForIndex()) return null;
 
 	const doc = documents.get(params.textDocument.uri);
 	if (!doc) return null;
@@ -266,8 +332,8 @@ connection.onHover((params: HoverParams) => {
 
 // ─── Completion ──────────────────────────────────────────────────────────────
 
-connection.onCompletion((params: CompletionParams): LSPCompletionItem[] => {
-	if (!indexReady) return [];
+connection.onCompletion(async (params: CompletionParams): Promise<LSPCompletionItem[]> => {
+	if (!await waitForIndex()) return [];
 
 	const doc = documents.get(params.textDocument.uri);
 	if (!doc) return [];
@@ -299,7 +365,7 @@ connection.onCompletion((params: CompletionParams): LSPCompletionItem[] => {
 
 connection.onReferences(
 	async (params: ReferenceParams): Promise<Location[] | null> => {
-		if (!indexReady || !workspaceRoot) return null;
+		if (!await waitForIndex() || !workspaceRoot) return null;
 
 		const doc = documents.get(params.textDocument.uri);
 		if (!doc) return null;
@@ -348,8 +414,8 @@ connection.onReferences(
 // ─── Workspace Symbols ───────────────────────────────────────────────────────
 
 connection.onWorkspaceSymbol(
-	(params: WorkspaceSymbolParams): SymbolInformation[] => {
-		if (!indexReady) return [];
+	async (params: WorkspaceSymbolParams): Promise<SymbolInformation[]> => {
+		if (!await waitForIndex()) return [];
 
 		const symbols = getWorkspaceSymbols(params.query, classIndex);
 
@@ -371,8 +437,8 @@ connection.onWorkspaceSymbol(
 // ─── Rename ──────────────────────────────────────────────────────────────────
 
 connection.onPrepareRename(
-	(params: PrepareRenameParams): Range | null => {
-		if (!indexReady) return null;
+	async (params: PrepareRenameParams): Promise<Range | null> => {
+		if (!await waitForIndex()) return null;
 
 		const doc = documents.get(params.textDocument.uri);
 		if (!doc) return null;
@@ -435,7 +501,7 @@ connection.onPrepareRename(
 
 connection.onRenameRequest(
 	async (params: RenameParams): Promise<WorkspaceEdit | null> => {
-		if (!indexReady || !workspaceRoot) return null;
+		if (!await waitForIndex() || !workspaceRoot) return null;
 
 		const doc = documents.get(params.textDocument.uri);
 		if (!doc) return null;
@@ -563,8 +629,17 @@ async function publishDiagnostics(doc: TextDocument): Promise<void> {
 	connection.sendDiagnostics({ uri: doc.uri, diagnostics: lspDiags });
 }
 
-// Publish diagnostics on document open
-documents.onDidOpen((event) => {
+// Index embedded styles + publish diagnostics on document open
+documents.onDidOpen(async (event) => {
+	const filePath = URI.parse(event.document.uri).fsPath;
+	const lang = getFileLanguage(filePath, config);
+
+	// Index embedded <style> blocks from Vue/HTML files on open
+	if ((lang === "vue" || lang === "html") && config.searchEmbeddedStyles && indexReady) {
+		classIndex.removeFile(filePath);
+		classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+	}
+
 	publishDiagnostics(event.document);
 });
 
