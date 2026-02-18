@@ -4,6 +4,7 @@ import { parseVueClasses } from "../parsers/vue-parser.js";
 import { parseReactClasses } from "../parsers/react-parser.js";
 import { getFileLanguage } from "../scanner/workspace-scanner.js";
 import { getWordAtOffset, positionToOffset } from "../utils/position.js";
+import { bemTargetAtOffset } from "../utils/bem.js";
 import type { CssClassIndex } from "./css-index.js";
 
 export interface DefinitionResult {
@@ -35,7 +36,7 @@ export function getDefinition(
 
   // For CSS files, the class under cursor might itself be a selector
   if (lang === "css") {
-    return getDefinitionInCss(content, line, column, index);
+    return getDefinitionInCss(content, line, column, index, config);
   }
 
   // For template files, find the class name at the cursor position
@@ -44,14 +45,17 @@ export function getDefinition(
 
   if (!ref) {
     // Fallback: try to find a word at cursor position that matches a class
-    return getDefinitionByWord(content, line, column, index);
+    return getDefinitionByWord(content, line, column, index, config);
   }
 
-  const defs = index.lookup(ref.className);
+  // Resolve BEM part target based on cursor position within the class name
+  const targetClassName = resolveBemTarget(ref, column, config);
+
+  const defs = index.lookup(targetClassName);
   if (defs.length === 0) return null;
 
   return {
-    className: ref.className,
+    className: targetClassName,
     definitions: defs.map((d) => ({
       filePath: d.filePath,
       line: d.line,
@@ -71,8 +75,9 @@ function getDefinitionInCss(
   line: number,
   column: number,
   index: CssClassIndex,
+  config: CssClassesConfig,
 ): DefinitionResult | null {
-  return getDefinitionByWord(content, line, column, index);
+  return getDefinitionByWord(content, line, column, index, config);
 }
 
 /**
@@ -83,17 +88,30 @@ function getDefinitionByWord(
   line: number,
   column: number,
   index: CssClassIndex,
+  config?: CssClassesConfig,
 ): DefinitionResult | null {
   const offset = positionToOffset(content, line, column);
   const word = getWordAtOffset(content, offset);
 
   if (!word) return null;
 
-  const defs = index.lookup(word.word);
+  // Apply BEM part resolution within the word
+  let targetClassName = word.word;
+  if (config?.bemEnabled && config?.bemDefinitionParts) {
+    const cursorOffsetInWord = offset - word.start;
+    targetClassName = bemTargetAtOffset(
+      word.word,
+      cursorOffsetInWord,
+      config.bemSeparators.element,
+      config.bemSeparators.modifier,
+    );
+  }
+
+  const defs = index.lookup(targetClassName);
   if (defs.length === 0) return null;
 
   return {
-    className: word.word,
+    className: targetClassName,
     definitions: defs.map((d) => ({
       filePath: d.filePath,
       line: d.line,
@@ -103,6 +121,29 @@ function getDefinitionByWord(
       rawSelector: d.rawSelector,
     })),
   };
+}
+
+/**
+ * Resolve the BEM target class name based on cursor position within a reference.
+ * When bemDefinitionParts is enabled, the cursor position determines whether
+ * to jump to the block, element, or modifier definition.
+ */
+function resolveBemTarget(
+  ref: CssClassReference,
+  cursorColumn: number,
+  config: CssClassesConfig,
+): string {
+  if (!config.bemEnabled || !config.bemDefinitionParts) {
+    return ref.className;
+  }
+
+  const offsetInClass = cursorColumn - ref.column;
+  return bemTargetAtOffset(
+    ref.className,
+    offsetInClass,
+    config.bemSeparators.element,
+    config.bemSeparators.modifier,
+  );
 }
 
 /**

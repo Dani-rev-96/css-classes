@@ -134,6 +134,11 @@
           "default": "--",
           "description": "BEM modifier separator."
         },
+        "cssClasses.bemDefinitionParts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable BEM-part-aware go-to-definition. When enabled, jumping to definition targets the block, element, or modifier depending on cursor position within the class name."
+        },
         "cssClasses.scssNesting": {
           "type": "boolean",
           "default": true,

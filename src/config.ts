@@ -62,6 +62,10 @@ export function resolveConfig(
         DEFAULT_CONFIG.bemSeparators.modifier,
       ),
     },
+    bemDefinitionParts: asBool(
+      userConfig.bemDefinitionParts,
+      DEFAULT_CONFIG.bemDefinitionParts,
+    ),
     scssNesting: asBool(userConfig.scssNesting, DEFAULT_CONFIG.scssNesting),
     searchEmbeddedStyles: asBool(
       userConfig.searchEmbeddedStyles,

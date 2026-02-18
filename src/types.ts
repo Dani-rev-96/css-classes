@@ -90,6 +90,15 @@ export interface CssClassesConfig {
   };
 
   /**
+   * Enable BEM-part-aware go-to-definition.
+   * When enabled, the definition target depends on which BEM part the cursor
+   * is on: block, element, or modifier. When disabled, always jumps to the
+   * full class name.
+   * @default true
+   */
+  bemDefinitionParts: boolean;
+
+  /**
    * Enable SCSS nesting resolution.
    * @default true
    */
@@ -128,6 +137,7 @@ export const DEFAULT_CONFIG: CssClassesConfig = {
     element: "__",
     modifier: "--",
   },
+  bemDefinitionParts: true,
   scssNesting: true,
   searchEmbeddedStyles: true,
   respectGitignore: true,

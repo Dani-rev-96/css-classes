@@ -82,3 +82,54 @@ export function bemParents(
   }
   return parents;
 }
+
+/**
+ * Determine which BEM part the cursor is on within a class name and return the
+ * class name that should be looked up for go-to-definition.
+ *
+ * Given `card__header--active` (length 21) with separators `__` and `--`:
+ *   offset 0-3 ("card")          → "card"           (block)
+ *   offset 4-11 ("__header")     → "card__header"   (element)
+ *   offset 12-20 ("--active")    → "card__header--active" (modifier / full)
+ *
+ * If the class has no BEM structure, the full class name is returned.
+ *
+ * @param className  The full BEM class name string
+ * @param offset     Zero-based cursor offset within the class name
+ * @param elementSep Element separator (default "__")
+ * @param modifierSep Modifier separator (default "--")
+ * @returns The target class name to look up
+ */
+export function bemTargetAtOffset(
+  className: string,
+  offset: number,
+  elementSep = "__",
+  modifierSep = "--",
+): string {
+  const parts = parseBem(className, elementSep, modifierSep);
+  if (!parts) return className;
+
+  // No BEM structure → return as-is
+  if (!parts.element && !parts.modifier) return className;
+
+  const blockEnd = parts.block.length;
+
+  // Determine where the element separator+element ends
+  let elementEnd = blockEnd;
+  if (parts.element) {
+    elementEnd = blockEnd + elementSep.length + parts.element.length;
+  }
+
+  // Cursor within the block portion
+  if (offset < blockEnd) {
+    return parts.block;
+  }
+
+  // Cursor within the element separator or element name
+  if (parts.element && offset < elementEnd) {
+    return `${parts.block}${elementSep}${parts.element}`;
+  }
+
+  // Cursor is on the modifier separator or modifier — return full class name
+  return className;
+}

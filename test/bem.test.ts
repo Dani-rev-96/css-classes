@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseBem, isBem, bemParents } from "../src/utils/bem.js";
+import { parseBem, isBem, bemParents, bemTargetAtOffset } from "../src/utils/bem.js";
 
 describe("BEM Utils", () => {
   describe("parseBem", () => {
@@ -70,6 +70,83 @@ describe("BEM Utils", () => {
 
     it("returns block and element for element--modifier", () => {
       expect(bemParents("card__header--active")).toEqual(["card", "card__header"]);
+    });
+  });
+
+  describe("bemTargetAtOffset", () => {
+    // "card__header--active"
+    //  0123456789...
+    //  block=card (0-3), __header (4-11), --active (12-19)
+
+    it("returns block when cursor is on block part", () => {
+      expect(bemTargetAtOffset("card__header--active", 0)).toBe("card");
+      expect(bemTargetAtOffset("card__header--active", 2)).toBe("card");
+      expect(bemTargetAtOffset("card__header--active", 3)).toBe("card");
+    });
+
+    it("returns block__element when cursor is on element separator", () => {
+      expect(bemTargetAtOffset("card__header--active", 4)).toBe("card__header");
+      expect(bemTargetAtOffset("card__header--active", 5)).toBe("card__header");
+    });
+
+    it("returns block__element when cursor is on element name", () => {
+      expect(bemTargetAtOffset("card__header--active", 6)).toBe("card__header");
+      expect(bemTargetAtOffset("card__header--active", 11)).toBe("card__header");
+    });
+
+    it("returns full class when cursor is on modifier separator", () => {
+      expect(bemTargetAtOffset("card__header--active", 12)).toBe("card__header--active");
+      expect(bemTargetAtOffset("card__header--active", 13)).toBe("card__header--active");
+    });
+
+    it("returns full class when cursor is on modifier name", () => {
+      expect(bemTargetAtOffset("card__header--active", 14)).toBe("card__header--active");
+      expect(bemTargetAtOffset("card__header--active", 19)).toBe("card__header--active");
+    });
+
+    it("returns block for block__element (no modifier)", () => {
+      // "card__header"  block=card (0-3), __header (4-11)
+      expect(bemTargetAtOffset("card__header", 0)).toBe("card");
+      expect(bemTargetAtOffset("card__header", 3)).toBe("card");
+      expect(bemTargetAtOffset("card__header", 4)).toBe("card__header");
+      expect(bemTargetAtOffset("card__header", 11)).toBe("card__header");
+    });
+
+    it("returns block for block--modifier (no element)", () => {
+      // "card--featured"  block=card (0-3), --featured (4-13)
+      expect(bemTargetAtOffset("card--featured", 0)).toBe("card");
+      expect(bemTargetAtOffset("card--featured", 3)).toBe("card");
+      expect(bemTargetAtOffset("card--featured", 4)).toBe("card--featured");
+      expect(bemTargetAtOffset("card--featured", 13)).toBe("card--featured");
+    });
+
+    it("returns full class for non-BEM class names", () => {
+      expect(bemTargetAtOffset("container", 3)).toBe("container");
+    });
+
+    it("returns full class for plain block (no element or modifier)", () => {
+      expect(bemTargetAtOffset("card", 2)).toBe("card");
+    });
+
+    it("handles hyphenated BEM names", () => {
+      // "my-card__my-header--is-active"
+      // block=my-card (0-6), __my-header (7-17), --is-active (18-28)
+      expect(bemTargetAtOffset("my-card__my-header--is-active", 0)).toBe("my-card");
+      expect(bemTargetAtOffset("my-card__my-header--is-active", 6)).toBe("my-card");
+      expect(bemTargetAtOffset("my-card__my-header--is-active", 7)).toBe("my-card__my-header");
+      expect(bemTargetAtOffset("my-card__my-header--is-active", 17)).toBe("my-card__my-header");
+      expect(bemTargetAtOffset("my-card__my-header--is-active", 18)).toBe("my-card__my-header--is-active");
+      expect(bemTargetAtOffset("my-card__my-header--is-active", 28)).toBe("my-card__my-header--is-active");
+    });
+
+    it("supports custom separators", () => {
+      // "card-header_active" with element="-", modifier="_"
+      // block=card (0-3), -header (4-10), _active (11-17)
+      expect(bemTargetAtOffset("card-header_active", 0, "-", "_")).toBe("card");
+      expect(bemTargetAtOffset("card-header_active", 3, "-", "_")).toBe("card");
+      expect(bemTargetAtOffset("card-header_active", 4, "-", "_")).toBe("card-header");
+      expect(bemTargetAtOffset("card-header_active", 10, "-", "_")).toBe("card-header");
+      expect(bemTargetAtOffset("card-header_active", 11, "-", "_")).toBe("card-header_active");
     });
   });
 });

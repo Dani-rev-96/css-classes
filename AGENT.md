@@ -44,6 +44,7 @@
 - [x] Neovim 0.11+ setup documentation
 - [x] Test suite: 89 tests across 9 test files — all passing
 - [x] Test fixtures (CSS, SCSS/BEM, SCSS imports/partials, HTML, Vue, React/TSX)
+- [x] BEM-part-aware go-to-definition (jump to block, element, or modifier separately based on cursor position; configurable via `bemDefinitionParts`)
 
 ### Not Yet Implemented
 
