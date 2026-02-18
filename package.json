@@ -5,7 +5,7 @@
   "author": "Daniel",
   "license": "MIT",
   "type": "module",
-  "main": "dist/server.js",
+  "main": "dist/extension.js",
   "bin": {
     "css-classes-lsp": "dist/server.js"
   },
@@ -21,17 +21,21 @@
   "dependencies": {
     "fast-glob": "^3.3.2",
     "vscode-languageserver": "^9.0.1",
+    "vscode-languageclient": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12",
     "vscode-uri": "^3.0.8"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/vscode": "^1.109.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.0.0",
+		"vscode": "^1.80.0"
   },
+  "activationEvents": ["onLanguage:css", "onLanguage:scss", "onLanguage:typescriptreact", "onLanguage:javascriptreact", "onLanguage:html", "onLanguage:vue"],
   "files": [
     "dist",
     "README.md",
