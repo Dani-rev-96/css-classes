@@ -214,3 +214,37 @@ vim.cmd('edit ' .. vim.lsp.get_log_path())
 1. Wait for initial indexing (check LSP logs for "Indexed X classes")
 2. Ensure the filetype is correct: `:set filetype?`
 3. For Vue files, ensure `searchEmbeddedStyles` is enabled
+
+### E37 errors with `gd` / `grr` (Telescope + multiple LSP clients)
+
+If you override `gd` or `grr` with Telescope's LSP builtins (e.g. `telescope.builtin.lsp_definitions`), you may see `E37: No write since last change` when multiple LSP clients are attached to the same buffer (common for Vue files with Volar/vuels + ts_ls + css_classes).
+
+**Why it happens:** Telescope dispatches each client's LSP response independently. When the second client responds while a Telescope picker is already open, it tries to navigate away from Telescope's modified prompt buffer — triggering E37. You may also see stray characters in Telescope's search bar as a side effect.
+
+**Fix (recommended):** The plugin sets `vim.o.hidden = true` automatically on attach. If you have explicitly set `vim.o.hidden = false` somewhere in your config, remove that or set it to `true`:
+
+```lua
+vim.o.hidden = true
+```
+
+**Alternative fix:** Use Neovim 0.11's default `gd`/`grr` keymaps instead of Telescope overrides. The built-in handlers aggregate results from all clients before processing, avoiding per-client conflicts entirely. You can still get a Telescope picker via the `on_list` callback:
+
+```lua
+-- Remove any Telescope keymap overrides for gd/grr and use:
+vim.keymap.set('n', 'gd', function()
+vim.lsp.buf.definition({
+	on_list = function(options)
+		if #options.items == 1 then
+			local item = options.items[1]
+			local b = vim.fn.bufadd(item.filename)
+			vim.bo[b].buflisted = true
+			vim.api.nvim_win_set_buf(0, b)
+			vim.api.nvim_win_set_cursor(0, { item.lnum, item.col - 1 })
+		else
+			vim.fn.setqflist({}, ' ', options)
+			require('telescope.builtin').quickfix()
+		end
+	end,
+})
+end, { desc = 'LSP: Go to definition' })
+```
