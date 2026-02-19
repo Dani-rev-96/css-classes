@@ -24,7 +24,10 @@
     // flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = import nixpkgs {
+					inherit system;
+					config = { allowUnfree = true; };
+				};
 
         # The standalone LSP server binary (node wrapper)
         css-classes-lsp = pkgs.buildNpmPackage {
@@ -122,6 +125,8 @@
           buildInputs = with pkgs; [
             nodejs_22
             nodePackages.npm
+						gh
+						github-copilot-cli
           ];
         };
       }
