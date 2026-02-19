@@ -103,6 +103,52 @@ describe("SCSS Nesting", () => {
     expect(names).toContain("menu");
   });
 
+  it("does not duplicate parent classes in nested selectors", () => {
+    const scss = `.info-grid {
+  .info-item {
+    .label {
+      font-weight: 600;
+    }
+
+    .value {
+      color: #e2e8f0;
+
+      &.status {
+        font-weight: 600;
+
+        &.online {
+          color: #22c55e;
+        }
+
+        &.offline {
+          color: #94a3b8;
+        }
+      }
+    }
+  }
+}`;
+    const classes = parseCssClasses(scss, "/test.scss");
+    const names = classes.map((c) => c.className);
+
+    // Each class should appear exactly once
+    expect(names.filter((n) => n === "info-grid")).toHaveLength(1);
+    expect(names.filter((n) => n === "info-item")).toHaveLength(1);
+    expect(names.filter((n) => n === "label")).toHaveLength(1);
+    expect(names.filter((n) => n === "value")).toHaveLength(1);
+    expect(names.filter((n) => n === "status")).toHaveLength(1);
+    expect(names.filter((n) => n === "online")).toHaveLength(1);
+    expect(names.filter((n) => n === "offline")).toHaveLength(1);
+
+    // All classes should be present
+    expect(names).toContain("info-grid");
+    expect(names).toContain("info-item");
+    expect(names).toContain("label");
+    expect(names).toContain("value");
+    expect(names).toContain("status");
+    expect(names).toContain("online");
+    expect(names).toContain("offline");
+  });
+
   it("marks nested classes as nested", () => {
     const scss = `.card {\n  &__header {\n    padding: 16px;\n  }\n}`;
     const classes = parseCssClasses(scss, "/test.scss");

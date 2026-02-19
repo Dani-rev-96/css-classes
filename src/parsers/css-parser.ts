@@ -101,10 +101,24 @@ export function parseCssClasses(
             resolveNesting,
           );
 
-          // Extract classes from resolved selectors
+          // Collect parent classes to avoid re-registering them at nested levels
+          const parentClasses = new Set<string>();
+          if (scopeStack.length > 0) {
+            for (const parentSel of scopeStack[scopeStack.length - 1].selectors) {
+              for (const cls of extractClassesFromSelector(parentSel)) {
+                parentClasses.add(cls);
+              }
+            }
+          }
+
+          // Extract classes from resolved selectors, skipping parent classes
+          const seen = new Set<string>();
           for (const sel of resolvedSelectors) {
             const extracted = extractClassesFromSelector(sel);
             for (const cls of extracted) {
+              if (parentClasses.has(cls)) continue; // Already defined by parent scope
+              if (seen.has(cls)) continue; // Avoid duplicates from comma-separated parents
+              seen.add(cls);
               const bem = bemEnabled ? parseBem(cls, elementSep, modifierSep) : null;
               classes.push({
                 className: cls,
