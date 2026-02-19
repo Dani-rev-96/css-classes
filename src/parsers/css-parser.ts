@@ -83,8 +83,9 @@ export function parseCssClasses(
         continue;
       }
 
-      // Track selector starts
-      if (selectorBuffer.length === 0 && ch !== " " && ch !== "\t" && ch !== "{" && ch !== "}" && ch !== ";") {
+      // Track selector starts (use trimmed length so leading whitespace doesn't
+      // prevent detection of the real selector start position)
+      if (selectorBuffer.trim().length === 0 && ch !== " " && ch !== "\t" && ch !== "{" && ch !== "}" && ch !== ";") {
         selectorStartLine = lineIdx;
         selectorStartCol = col;
       }
@@ -259,7 +260,7 @@ export function extractStyleBlocks(
     const attrs = match[1] || "";
     const styleContent = match[2];
     const beforeStyle = content.slice(0, match.index);
-    const lineOffset = beforeStyle.split("\n").length;
+    const lineOffset = beforeStyle.split("\n").length - 1;
 
     // Detect lang attribute
     const langMatch = attrs.match(/lang\s*=\s*["'](\w+)["']/);

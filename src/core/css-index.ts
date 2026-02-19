@@ -98,12 +98,17 @@ export class CssClassIndex {
   /**
    * Parse CSS classes from content, using tree-sitter for .css files when enabled,
    * falling back to regex for .scss files or when tree-sitter is disabled.
+   *
+   * @param langHint — optional language hint (e.g. from a `<style lang="scss">` block)
+   *   that overrides file-extension-based detection.
    */
   private async parseClasses(
     content: string,
     filePath: string,
+    langHint?: string,
   ): Promise<CssClassDefinition[]> {
-    if (this.config.experimentalTreeSitter && !filePath.endsWith(".scss")) {
+    const isScss = langHint === "scss" || langHint === "sass" || filePath.endsWith(".scss");
+    if (this.config.experimentalTreeSitter && !isScss) {
       try {
         return await tsParseCssClasses(content, filePath, this.config);
       } catch {
@@ -240,7 +245,7 @@ export class CssClassIndex {
   async indexEmbeddedStyles(filePath: string, content: string): Promise<void> {
     const blocks = extractStyleBlocks(content);
     for (const block of blocks) {
-      const classes = await this.parseClasses(block.content, filePath);
+      const classes = await this.parseClasses(block.content, filePath, block.lang);
       for (const def of classes) {
         // Adjust line numbers for the style block offset
         this.addDefinition({

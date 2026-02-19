@@ -95,6 +95,30 @@ describe("Tree-sitter CSS Parser", () => {
     expect(cls?.bem?.element).toBe("header");
     expect(cls?.bem?.modifier).toBe("highlighted");
   });
+
+  it("does not duplicate parent classes in CSS nesting", async () => {
+    // CSS nesting (standard, not SCSS) — tree-sitter-css should handle this
+    const css = `.parent {\n  color: red;\n  .child {\n    color: blue;\n  }\n}`;
+    const classes = await parseCssClasses(css, "/test.css");
+    const names = classes.map((c) => c.className);
+
+    // parent should only appear once
+    expect(names.filter((n) => n === "parent")).toHaveLength(1);
+    // child should only appear once
+    expect(names.filter((n) => n === "child")).toHaveLength(1);
+  });
+
+  it("records correct line numbers for nested rules", async () => {
+    const css = `.wrapper {\n  color: red;\n  .inner {\n    color: blue;\n  }\n}`;
+    const classes = await parseCssClasses(css, "/test.css");
+
+    const wrapper = classes.find((c) => c.className === "wrapper");
+    const inner = classes.find((c) => c.className === "inner");
+
+    // .wrapper on line 0, .inner on line 2
+    expect(wrapper?.line).toBe(0);
+    expect(inner?.line).toBe(2);
+  });
 });
 
 // ─── HTML Parser ────────────────────────────────────────────────────────────
