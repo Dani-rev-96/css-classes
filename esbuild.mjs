@@ -13,11 +13,26 @@ const esmBanner = `import{createRequire as __cr}from"module";const require=__cr(
 // When tree-sitter is enabled, the server loads .wasm grammars at runtime.
 // Copy them into dist/ so they're available after bundling.
 const wasmFiles = [
-	["node_modules/web-tree-sitter/web-tree-sitter.wasm", "dist/web-tree-sitter.wasm"],
-	["node_modules/tree-sitter-css/tree-sitter-css.wasm", "dist/tree-sitter-css.wasm"],
-	["node_modules/tree-sitter-html/tree-sitter-html.wasm", "dist/tree-sitter-html.wasm"],
-	["node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm", "dist/tree-sitter-javascript.wasm"],
-	["node_modules/tree-sitter-typescript/tree-sitter-tsx.wasm", "dist/tree-sitter-tsx.wasm"],
+	[
+		"node_modules/web-tree-sitter/web-tree-sitter.wasm",
+		"dist/web-tree-sitter.wasm",
+	],
+	[
+		"node_modules/tree-sitter-css/tree-sitter-css.wasm",
+		"dist/tree-sitter-css.wasm",
+	],
+	[
+		"node_modules/tree-sitter-html/tree-sitter-html.wasm",
+		"dist/tree-sitter-html.wasm",
+	],
+	[
+		"node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",
+		"dist/tree-sitter-javascript.wasm",
+	],
+	[
+		"node_modules/tree-sitter-typescript/tree-sitter-tsx.wasm",
+		"dist/tree-sitter-tsx.wasm",
+	],
 ];
 
 function copyWasmFiles() {
@@ -31,10 +46,6 @@ function copyWasmFiles() {
 	}
 	console.log("[esbuild] WASM grammar files copied to dist/");
 }
-
-// Shim require() for ESM bundles — needed because vscode-languageclient
-// and vscode-languageserver internally use require() for Node built-ins.
-const esmBanner = `import{createRequire as __cr}from"module";const require=__cr(import.meta.url);`;
 
 /** @type {import('esbuild').BuildOptions} */
 const sharedOptions = {
