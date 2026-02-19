@@ -51,6 +51,7 @@ import { extractStyleBlocks } from "./parsers/css-parser.js";
 import { parseHtmlClasses } from "./parsers/html-parser.js";
 import { parseVueClasses } from "./parsers/vue-parser.js";
 import { parseReactClasses } from "./parsers/react-parser.js";
+import { initTreeSitter, preloadGrammars, tsParseHtmlClasses, tsParseReactClasses, tsParseVueClasses } from "./parsers/treesitter/index.js";
 
 // Create connection and document manager
 const connection = createConnection(ProposedFeatures.all);
@@ -176,6 +177,22 @@ connection.onInitialized(async () => {
 			);
 		});
 
+	// Initialize tree-sitter if experimental flag is enabled
+	if (config.experimentalTreeSitter) {
+		try {
+			connection.console.log("[css-classes-lsp] Initializing tree-sitter (experimental)...");
+			await initTreeSitter();
+			await preloadGrammars();
+			connection.console.log("[css-classes-lsp] Tree-sitter initialized successfully.");
+		} catch (err) {
+			connection.console.error(
+				`[css-classes-lsp] Tree-sitter initialization failed, falling back to regex parsers: ${err}`,
+			);
+			config = { ...config, experimentalTreeSitter: false };
+			classIndex.updateConfig(config);
+		}
+	}
+
 	// Initial indexing
 	if (workspaceRoot) {
 		connection.console.log(
@@ -249,7 +266,7 @@ documents.onDidSave(async (event) => {
 	} else if (lang === "vue" || lang === "html") {
 		if (config.searchEmbeddedStyles) {
 			classIndex.removeFile(filePath);
-			classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+			await classIndex.indexEmbeddedStyles(filePath, event.document.getText());
 			indexChanged = true;
 		}
 	}
@@ -597,16 +614,25 @@ async function publishDiagnostics(doc: TextDocument): Promise<void> {
 	const content = doc.getText();
 	let refs: CssClassReference[] = [];
 
-	switch (lang) {
-		case "html":
-			refs = parseHtmlClasses(content, filePath);
-			break;
-		case "vue":
-			refs = parseVueClasses(content, filePath);
-			break;
-		case "react":
-			refs = parseReactClasses(content, filePath);
-			break;
+	if (config.experimentalTreeSitter) {
+		try {
+			switch (lang) {
+				case "html":
+					refs = await tsParseHtmlClasses(content, filePath);
+					break;
+				case "vue":
+					refs = await tsParseVueClasses(content, filePath);
+					break;
+				case "react":
+					refs = await tsParseReactClasses(content, filePath);
+					break;
+			}
+		} catch {
+			// Fall back to regex on tree-sitter failure
+			refs = parseForLang(lang, content, filePath);
+		}
+	} else {
+		refs = parseForLang(lang, content, filePath);
 	}
 
 	const diags = getDiagnostics(refs, classIndex, config);
@@ -629,6 +655,26 @@ async function publishDiagnostics(doc: TextDocument): Promise<void> {
 	connection.sendDiagnostics({ uri: doc.uri, diagnostics: lspDiags });
 }
 
+/**
+ * Parse class references using the regex parsers for a given language.
+ */
+function parseForLang(
+	lang: "html" | "vue" | "react",
+	content: string,
+	filePath: string,
+): CssClassReference[] {
+	switch (lang) {
+		case "html":
+			return parseHtmlClasses(content, filePath);
+		case "vue":
+			return parseVueClasses(content, filePath);
+		case "react":
+			return parseReactClasses(content, filePath);
+		default:
+			return [];
+	}
+}
+
 // Index embedded styles + publish diagnostics on document open
 documents.onDidOpen(async (event) => {
 	const filePath = URI.parse(event.document.uri).fsPath;
@@ -637,7 +683,7 @@ documents.onDidOpen(async (event) => {
 	// Index embedded <style> blocks from Vue/HTML files on open
 	if ((lang === "vue" || lang === "html") && config.searchEmbeddedStyles && indexReady) {
 		classIndex.removeFile(filePath);
-		classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+		await classIndex.indexEmbeddedStyles(filePath, event.document.getText());
 	}
 
 	publishDiagnostics(event.document);

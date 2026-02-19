@@ -1,5 +1,6 @@
 import type { CssClassDefinition, CssClassesConfig, ScssDirectives, ScssMixin, ScssExtend, ScssInclude } from "../types.js";
 import { parseCssClasses, extractStyleBlocks, parseScssDirectives } from "../parsers/css-parser.js";
+import { tsParseCssClasses } from "../parsers/treesitter/index.js";
 import { scanWorkspace, scanTemplateFiles, readFileContent } from "../scanner/workspace-scanner.js";
 import { resolveFileImports } from "./import-resolver.js";
 import { findSourceMap, resolveOriginalPosition } from "../utils/sourcemap.js";
@@ -95,6 +96,24 @@ export class CssClassIndex {
   }
 
   /**
+   * Parse CSS classes from content, using tree-sitter for .css files when enabled,
+   * falling back to regex for .scss files or when tree-sitter is disabled.
+   */
+  private async parseClasses(
+    content: string,
+    filePath: string,
+  ): Promise<CssClassDefinition[]> {
+    if (this.config.experimentalTreeSitter && !filePath.endsWith(".scss")) {
+      try {
+        return await tsParseCssClasses(content, filePath, this.config);
+      } catch {
+        // Fall back to regex parser on tree-sitter failure
+      }
+    }
+    return parseCssClasses(content, filePath, this.config);
+  }
+
+  /**
    * Fully re-index the workspace by scanning all CSS/SCSS files.
    * Follows @import/@use/@forward chains to include referenced files.
    */
@@ -113,7 +132,7 @@ export class CssClassIndex {
       files.map(async (filePath) => {
         const content = await readFileContent(filePath);
         if (!content) return { classes: [] as CssClassDefinition[], content: null, filePath };
-        const classes = parseCssClasses(content, filePath, this.config);
+        const classes = await this.parseClasses(content, filePath);
         return { classes, content, filePath };
       }),
     );
@@ -151,7 +170,7 @@ export class CssClassIndex {
         const content = await readFileContent(newFile);
         if (!content) continue;
 
-        const classes = parseCssClasses(content, newFile, this.config);
+        const classes = await this.parseClasses(content, newFile);
         for (const def of classes) {
           this.addDefinition(def);
         }
@@ -167,7 +186,7 @@ export class CssClassIndex {
         templateFiles.map(async (filePath) => {
           const content = await readFileContent(filePath);
           if (!content) return;
-          this.indexEmbeddedStyles(filePath, content);
+          await this.indexEmbeddedStyles(filePath, content);
         }),
       );
     }
@@ -185,7 +204,7 @@ export class CssClassIndex {
     const fileContent = content ?? (await readFileContent(filePath));
     if (!fileContent) return;
 
-    const classes = parseCssClasses(fileContent, filePath, this.config);
+    const classes = await this.parseClasses(fileContent, filePath);
 
     // Check for source map and resolve original positions
     const sourceMap = await findSourceMap(filePath, fileContent);
@@ -218,10 +237,10 @@ export class CssClassIndex {
   /**
    * Index embedded <style> blocks from Vue/Svelte/HTML files.
    */
-  indexEmbeddedStyles(filePath: string, content: string): void {
+  async indexEmbeddedStyles(filePath: string, content: string): Promise<void> {
     const blocks = extractStyleBlocks(content);
     for (const block of blocks) {
-      const classes = parseCssClasses(block.content, filePath, this.config);
+      const classes = await this.parseClasses(block.content, filePath);
       for (const def of classes) {
         // Adjust line numbers for the style block offset
         this.addDefinition({

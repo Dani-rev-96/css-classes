@@ -75,6 +75,10 @@ export function resolveConfig(
       userConfig.respectGitignore,
       DEFAULT_CONFIG.respectGitignore,
     ),
+    experimentalTreeSitter: asBool(
+      userConfig.experimentalTreeSitter,
+      DEFAULT_CONFIG.experimentalTreeSitter,
+    ),
   };
 }
 

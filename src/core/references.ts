@@ -2,6 +2,7 @@ import type { CssClassesConfig, CssClassReference } from "../types.js";
 import { parseHtmlClasses } from "../parsers/html-parser.js";
 import { parseVueClasses } from "../parsers/vue-parser.js";
 import { parseReactClasses } from "../parsers/react-parser.js";
+import { tsParseHtmlClasses, tsParseReactClasses, tsParseVueClasses } from "../parsers/treesitter/index.js";
 import { getFileLanguage, scanTemplateFiles, readFileContent } from "../scanner/workspace-scanner.js";
 import type { CssClassIndex } from "./css-index.js";
 
@@ -44,7 +45,7 @@ export async function getReferences(
       const lang = getFileLanguage(filePath, config);
       if (!lang || lang === "css") return [];
 
-      return parseFileForReferences(content, filePath, lang);
+      return parseFileForReferences(content, filePath, lang, config);
     }),
   );
 
@@ -97,7 +98,7 @@ export async function getAllReferences(
       const lang = getFileLanguage(filePath, config);
       if (!lang || lang === "css") return [];
 
-      return parseFileForReferences(content, filePath, lang);
+      return parseFileForReferences(content, filePath, lang, config);
     }),
   );
 
@@ -115,7 +116,11 @@ function parseFileForReferences(
   content: string,
   filePath: string,
   lang: "html" | "vue" | "react",
-): CssClassReference[] {
+  config?: CssClassesConfig,
+): CssClassReference[] | Promise<CssClassReference[]> {
+  if (config?.experimentalTreeSitter) {
+    return parseFileForReferencesTS(content, filePath, lang);
+  }
   switch (lang) {
     case "html":
       return parseHtmlClasses(content, filePath);
@@ -125,5 +130,39 @@ function parseFileForReferences(
       return parseReactClasses(content, filePath);
     default:
       return [];
+  }
+}
+
+/**
+ * Tree-sitter variant of parseFileForReferences (async).
+ */
+async function parseFileForReferencesTS(
+  content: string,
+  filePath: string,
+  lang: "html" | "vue" | "react",
+): Promise<CssClassReference[]> {
+  try {
+    switch (lang) {
+      case "html":
+        return await tsParseHtmlClasses(content, filePath);
+      case "vue":
+        return await tsParseVueClasses(content, filePath);
+      case "react":
+        return await tsParseReactClasses(content, filePath);
+      default:
+        return [];
+    }
+  } catch {
+    // Fall back to regex parsers on tree-sitter failure
+    switch (lang) {
+      case "html":
+        return parseHtmlClasses(content, filePath);
+      case "vue":
+        return parseVueClasses(content, filePath);
+      case "react":
+        return parseReactClasses(content, filePath);
+      default:
+        return [];
+    }
   }
 }

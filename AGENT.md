@@ -48,6 +48,7 @@
 - [x] **SCSS `@extend`, `@mixin`, `@include` awareness** — parses directives, indexes relationships, shows `@extend` info in hover
 - [x] **Rename provider** (rename class across templates + stylesheets via `textDocument/rename` with `prepareRename` support)
 - [x] **Sourcemap support for CSS-in-JS** — resolves generated CSS positions back to original source via V3 source maps (inline + external)
+- [x] **Experimental tree-sitter parser** — opt-in alternative parser backend behind `experimentalTreeSitter` config flag; uses web-tree-sitter WASM runtime with tree-sitter-css, tree-sitter-html, tree-sitter-javascript, tree-sitter-typescript grammars; SCSS files always fall back to regex parser
 
 ### Not Yet Implemented
 
@@ -60,18 +61,23 @@
 
 ### Architecture Decisions
 
-**Parser approach: Custom regex/state-machine (not tree-sitter or ANTLR)**
+**Dual parser approach: Regex (default) + Tree-sitter (experimental)**
 
-The parsers use a hand-written approach:
+The parsers support two backends, selected via `experimentalTreeSitter` config flag (default: off):
 
-- **CSS/SCSS**: Character-by-character state machine with scope stack for nesting. This is the correct approach for CSS — it handles comments, strings, `&` nesting, and selector extraction efficiently.
+**Regex parsers (default):**
+
+- **CSS/SCSS**: Character-by-character state machine with scope stack for nesting. Handles comments, strings, `&` nesting, and selector extraction efficiently.
 - **HTML/Vue/React**: Full-content regex matching with offset-to-line/column conversion. Handles multi-line attributes correctly.
 
-**Why not tree-sitter?** Tree-sitter is the right long-term direction (AST > regex, incremental parsing is ideal for LSP). However:
+**Tree-sitter parsers (experimental):**
 
-- It adds significant dependency complexity (native bindings or WASM + grammar files per language)
-- The current parsers are fast, dependency-free, and cover all major patterns
-- Tree-sitter migration is planned as a future phase when the project needs it
+- Uses `web-tree-sitter` (WASM runtime) for portability — no native bindings needed.
+- Grammars: tree-sitter-css (.css only), tree-sitter-html, tree-sitter-javascript, tree-sitter-tsx.
+- **SCSS always falls back to regex** — tree-sitter-css doesn't understand SCSS syntax (`&`, `@mixin`, `$variables`).
+- Every tree-sitter call has try/catch fallback to the regex parser.
+- WASM files are bundled into `dist/` at build time; grammar npm packages are devDependencies.
+- Parser instances are cached — grammars loaded once during initialization.
 
 **Why not ANTLR?** Wrong tool — Java-centric, no incremental parsing, requires maintaining custom grammars for languages that already have tree-sitter grammars.
 
@@ -101,7 +107,14 @@ src/
 │   │                        parseScssDirectives() — @mixin/@extend/@include extraction
 │   ├── html-parser.ts     # parseHtmlClasses() — class="..." extraction (full-content)
 │   ├── vue-parser.ts      # parseVueClasses() — static + dynamic :class (full-content)
-│   └── react-parser.ts    # parseReactClasses() — className, clsx, CSS Modules, template literals
+│   ├── react-parser.ts    # parseReactClasses() — className, clsx, CSS Modules, template literals
+│   └── treesitter/        # Tree-sitter WASM parser backend (experimental)
+│       ├── init.ts        # initTreeSitter(), preloadGrammars() — WASM runtime + grammar cache
+│       ├── css-parser.ts  # tsParseCssClasses() — tree-sitter CSS class extraction
+│       ├── html-parser.ts # tsParseHtmlClasses() — tree-sitter HTML class extraction
+│       ├── react-parser.ts# tsParseReactClasses() — tree-sitter JSX/TSX extraction
+│       ├── vue-parser.ts  # tsParseVueClasses() — tree-sitter Vue template extraction
+│       └── index.ts       # Barrel re-exports
 ├── scanner/
 │   └── workspace-scanner.ts  # scanWorkspace(), scanTemplateFiles(), readFileContent()
 └── utils/
@@ -165,7 +178,7 @@ npm test              # Run all tests
 npm run test:watch    # Watch mode
 ```
 
-**142 tests** across 12 test files:
+**168 tests** across 13 test files:
 
 - `test/css-parser.test.ts` — CSS parsing, SCSS nesting, BEM detection, style extraction (16)
 - `test/html-parser.test.ts` — HTML class attribute extraction, positions (7)
@@ -179,6 +192,7 @@ npm run test:watch    # Watch mode
 - `test/scss-directives.test.ts` — @mixin, @extend, @include parsing and context resolution (16)
 - `test/rename.test.ts` — Rename across CSS definitions and template references (7)
 - `test/sourcemap.test.ts` — V3 source map parsing, VLQ decoding, position resolution (15)
+- `test/treesitter.test.ts` — Tree-sitter CSS/HTML/React/Vue parsers: class extraction, positions, BEM, @media, modules (25)
 
 ## Build & Run
 
@@ -208,6 +222,7 @@ All settings go under `cssClasses` (or `css-classes`) key in LSP settings/initia
 | `bemSeparators.modifier` | `string`   | `"--"`                                                              |
 | `scssNesting`            | `bool`     | `true`                                                              |
 | `searchEmbeddedStyles`   | `bool`     | `true`                                                              |
+| `experimentalTreeSitter` | `bool`     | `false`                                                             |
 
 ## Agent Instructions
 

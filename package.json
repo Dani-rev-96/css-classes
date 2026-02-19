@@ -46,16 +46,21 @@
   },
   "dependencies": {
     "fast-glob": "^3.3.2",
-    "vscode-languageserver": "^9.0.1",
     "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12",
-    "vscode-uri": "^3.0.8"
+    "vscode-uri": "^3.0.8",
+    "web-tree-sitter": "^0.26.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.109.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",
+    "tree-sitter-css": "^0.25.0",
+    "tree-sitter-html": "^0.23.2",
+    "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-typescript": "^0.23.2",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
@@ -77,14 +82,26 @@
       "properties": {
         "cssClasses.includePatterns": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["**/*.css", "**/*.scss"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/*.css",
+            "**/*.scss"
+          ],
           "description": "Glob patterns for CSS/SCSS files to index."
         },
         "cssClasses.excludePatterns": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.git/**"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/.git/**"
+          ],
           "description": "Glob patterns to exclude from indexing."
         },
         "cssClasses.languages.html": {
@@ -104,26 +121,45 @@
         },
         "cssClasses.extensions.html": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": [".html", ".htm"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".html",
+            ".htm"
+          ],
           "description": "File extensions treated as HTML."
         },
         "cssClasses.extensions.vue": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": [".vue"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".vue"
+          ],
           "description": "File extensions treated as Vue."
         },
         "cssClasses.extensions.react": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": [".jsx", ".tsx"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".jsx",
+            ".tsx"
+          ],
           "description": "File extensions treated as React."
         },
         "cssClasses.extensions.css": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": [".css", ".scss"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".css",
+            ".scss"
+          ],
           "description": "Stylesheet file extensions to index."
         },
         "cssClasses.bemEnabled": {
@@ -160,6 +196,11 @@
           "type": "boolean",
           "default": true,
           "description": "Respect .gitignore when scanning for files. Excludes files matching .gitignore patterns from indexing."
+        },
+        "cssClasses.experimentalTreeSitter": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "**(Experimental)** Use tree-sitter for parsing instead of the built-in regex parsers. May improve performance on large or complex files. Requires a restart to take effect."
         }
       }
     }

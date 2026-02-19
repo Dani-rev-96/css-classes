@@ -188,6 +188,14 @@ export interface CssClassesConfig {
    * @default false
    */
   respectGitignore: boolean;
+
+  /**
+   * Use tree-sitter for parsing instead of the built-in regex parsers.
+   * This is an experimental feature that may improve performance on large files.
+   * Requires WASM grammar files to be available alongside the server.
+   * @default false
+   */
+  experimentalTreeSitter: boolean;
 }
 
 export const DEFAULT_CONFIG: CssClassesConfig = {
@@ -213,4 +221,5 @@ export const DEFAULT_CONFIG: CssClassesConfig = {
   scssNesting: true,
   searchEmbeddedStyles: true,
   respectGitignore: true,
+  experimentalTreeSitter: false,
 };
