@@ -29,10 +29,13 @@
 					config = { allowUnfree = true; };
 				};
 
+        packageJson = builtins.fromJSON (builtins.readFile ./package.json);
+        pname = packageJson.name;
+        version = packageJson.version;
+
         # The standalone LSP server binary (node wrapper)
         css-classes-lsp = pkgs.buildNpmPackage {
-          pname = "css-classes-lsp";
-          version = "0.1.0";
+          inherit pname version;
           src = self;
           npmDeps = pkgs.importNpmLock {
             npmRoot = self;
@@ -71,8 +74,8 @@
         # Neovim plugin (Lua files + pre-built server)
         # First build with npm, then wrap as a Vim plugin
         serverDist = pkgs.buildNpmPackage {
-          pname = "css-classes-dist";
-          version = "0.1.0";
+          pname = "${pname}-dist";
+          inherit version;
           src = self;
           npmDeps = pkgs.importNpmLock {
             npmRoot = self;
@@ -92,8 +95,8 @@
         };
 
         vimPlugin = pkgs.vimUtils.buildVimPlugin {
-          pname = "css-classes-nvim";
-          version = "0.1.0";
+          pname = "${pname}-nvim";
+          inherit version;
           src = self;
 
           # No build needed — copy pre-built dist from serverDist

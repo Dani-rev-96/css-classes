@@ -196,6 +196,14 @@ export interface CssClassesConfig {
    * @default false
    */
   experimentalTreeSitter: boolean;
+
+  /**
+   * Scope of rename operations.
+   * - "file": Only rename in the current file.
+   * - "workspace": Rename across all files in the workspace.
+   * @default "workspace"
+   */
+  renameScope: "file" | "workspace";
 }
 
 export const DEFAULT_CONFIG: CssClassesConfig = {
@@ -222,4 +230,5 @@ export const DEFAULT_CONFIG: CssClassesConfig = {
   searchEmbeddedStyles: true,
   respectGitignore: true,
   experimentalTreeSitter: false,
+  renameScope: "workspace",
 };

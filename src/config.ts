@@ -79,6 +79,11 @@ export function resolveConfig(
       userConfig.experimentalTreeSitter,
       DEFAULT_CONFIG.experimentalTreeSitter,
     ),
+    renameScope: asEnum(
+      userConfig.renameScope,
+      ["file", "workspace"],
+      DEFAULT_CONFIG.renameScope,
+    ),
   };
 }
 
@@ -95,4 +100,11 @@ function asBool(value: unknown, fallback: boolean): boolean {
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
+}
+
+function asEnum<T extends string>(value: unknown, allowed: T[], fallback: T): T {
+  if (typeof value === "string" && (allowed as string[]).includes(value)) {
+    return value as T;
+  }
+  return fallback;
 }
