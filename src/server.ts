@@ -530,7 +530,7 @@ connection.onRenameRequest(
 					Position.create(edit.line, edit.column),
 					Position.create(edit.line, edit.endColumn),
 				),
-				newText: computeNewText(edit, params.newName),
+				newText: computeNewText(edit, result.oldName, params.newName),
 			});
 		}
 

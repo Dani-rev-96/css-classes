@@ -5,6 +5,7 @@ import { parseReactClasses } from "../parsers/react-parser.js";
 import { tsParseHtmlClasses, tsParseReactClasses, tsParseVueClasses } from "../parsers/treesitter/index.js";
 import { getFileLanguage, scanTemplateFiles, readFileContent } from "../scanner/workspace-scanner.js";
 import { getWordAtOffset, positionToOffset } from "../utils/position.js";
+import { parseBem, bemTargetAtOffset } from "../utils/bem.js";
 import type { CssClassIndex } from "./css-index.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -22,28 +23,35 @@ export interface RenameEdit {
    * When set, the edit range covers the `&`-suffixed selector portion
    * and the server must compute the new text as:
    *   `"&" + newName.slice(parentPrefix.length)`
-   *
-   * When undefined, the edit range covers the literal class name and the
-   * new text is simply the new name.
    */
   parentPrefix?: string;
+  /**
+   * The original full class name that this edit belongs to.
+   * Used for BEM cascade: when renaming a block, each child class
+   * has a different `originalClassName` with the same prefix being replaced.
+   */
+  originalClassName?: string;
 }
 
 export interface PrepareRenameResult {
-  /** The full class name at the cursor (no BEM resolution) */
+  /**
+   * The BEM-resolved target class name at the cursor.
+   * When cursor is on "overlay" in `overlay__spacer`, this is `overlay` (the block).
+   * When cursor is on "spacer" in `overlay__spacer`, this is `overlay__spacer`.
+   */
   className: string;
   /** Zero-based line */
   line: number;
-  /** Zero-based column start of the class name */
+  /** Zero-based column start of the rename target within the full class */
   column: number;
-  /** Zero-based column end of the class name */
+  /** Zero-based column end of the rename target */
   endColumn: number;
 }
 
 export interface RenameResult {
-  /** The original class name */
+  /** The original class name (BEM-resolved target) */
   oldName: string;
-  /** All locations to rename (both definitions and references) */
+  /** All locations to rename (definitions + references, including BEM cascade) */
   edits: RenameEdit[];
 }
 
@@ -51,8 +59,11 @@ export interface RenameResult {
 
 /**
  * Determine the exact class name and range at the cursor for rename.
- * Unlike getDefinition(), this does NOT apply BEM part resolution —
- * it always returns the full class name under the cursor.
+ *
+ * BEM-aware: if cursor is on the "block" portion of `block__element`, the
+ * target is just the block name and the range covers only that substring.
+ * This way the user renames the block prefix, and getRename cascades to all
+ * BEM children.
  *
  * Works for both template files (HTML/Vue/React) and CSS/SCSS files.
  */
@@ -68,7 +79,7 @@ export async function prepareRename(
   if (!lang) return null;
 
   if (lang === "css") {
-    return prepareRenameInCss(content, filePath, line, column, index);
+    return prepareRenameInCss(content, line, column, index, config);
   }
 
   // Template file: parse all class references and find the one at cursor
@@ -76,60 +87,74 @@ export async function prepareRename(
   const ref = findRefAtPosition(refs, line, column);
 
   if (ref) {
-    return {
-      className: ref.className,
-      line: ref.line,
-      column: ref.column,
-      endColumn: ref.endColumn,
-    };
+    return bemAwarePrepare(ref.className, ref.line, ref.column, ref.endColumn, column, config);
   }
 
   // Fallback: try word-at-cursor that exists in the index
-  return prepareRenameByWord(content, line, column, index);
+  return prepareRenameByWord(content, line, column, index, config);
+}
+
+/**
+ * Given a full class name and its range, resolve BEM part at cursor.
+ * Returns the BEM target substring and adjusts the range accordingly.
+ */
+function bemAwarePrepare(
+  fullClassName: string,
+  refLine: number,
+  refColumn: number,
+  refEndColumn: number,
+  cursorColumn: number,
+  config: CssClassesConfig,
+): PrepareRenameResult {
+  if (!config.bemEnabled) {
+    return { className: fullClassName, line: refLine, column: refColumn, endColumn: refEndColumn };
+  }
+
+  const offsetInClass = cursorColumn - refColumn;
+  const target = bemTargetAtOffset(
+    fullClassName,
+    offsetInClass,
+    config.bemSeparators.element,
+    config.bemSeparators.modifier,
+  );
+
+  // target is either the full class or a BEM prefix (block or block__element)
+  return {
+    className: target,
+    line: refLine,
+    column: refColumn,
+    endColumn: refColumn + target.length,
+  };
 }
 
 /**
  * Prepare rename for a CSS/SCSS file.
- * Finds the class name under cursor in the selector context.
  */
 function prepareRenameInCss(
   content: string,
-  _filePath: string,
   line: number,
   column: number,
   index: CssClassIndex,
+  config: CssClassesConfig,
 ): PrepareRenameResult | null {
   const offset = positionToOffset(content, line, column);
   const word = getWordAtOffset(content, offset);
   if (!word) return null;
 
-  // Check if there's a '.' immediately before the word → class selector
   const dotBefore = word.start > 0 && content[word.start - 1] === ".";
-
-  // The word must be a known class (or at least look like one)
   const defs = index.lookup(word.word);
   if (defs.length === 0 && !dotBefore) return null;
 
-  // Compute line/column of word start
-  const lines = content.split("\n");
-  let charCount = 0;
-  let wordLine = 0;
-  let wordCol = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (charCount + lines[i].length >= word.start) {
-      wordLine = i;
-      wordCol = word.start - charCount;
-      break;
-    }
-    charCount += lines[i].length + 1; // +1 for \n
-  }
+  const wordPos = offsetToLineCol(content, word.start);
 
-  return {
-    className: word.word,
-    line: wordLine,
-    column: wordCol,
-    endColumn: wordCol + word.word.length,
-  };
+  return bemAwarePrepare(
+    word.word,
+    wordPos.line,
+    wordPos.col,
+    wordPos.col + word.word.length,
+    column,
+    config,
+  );
 }
 
 /**
@@ -140,6 +165,7 @@ function prepareRenameByWord(
   line: number,
   column: number,
   index: CssClassIndex,
+  config: CssClassesConfig,
 ): PrepareRenameResult | null {
   const offset = positionToOffset(content, line, column);
   const word = getWordAtOffset(content, offset);
@@ -148,41 +174,37 @@ function prepareRenameByWord(
   const defs = index.lookup(word.word);
   if (defs.length === 0) return null;
 
-  // Compute line/column from the word offset
-  const lines = content.split("\n");
-  let charCount = 0;
-  let wordLine = 0;
-  let wordCol = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (charCount + lines[i].length >= word.start) {
-      wordLine = i;
-      wordCol = word.start - charCount;
-      break;
-    }
-    charCount += lines[i].length + 1;
-  }
+  const wordPos = offsetToLineCol(content, word.start);
 
-  return {
-    className: word.word,
-    line: wordLine,
-    column: wordCol,
-    endColumn: wordCol + word.word.length,
-  };
+  return bemAwarePrepare(
+    word.word,
+    wordPos.line,
+    wordPos.col,
+    wordPos.col + word.word.length,
+    column,
+    config,
+  );
 }
 
 // ─── Rename Edits ────────────────────────────────────────────────────────────
 
 /**
- * Compute all rename edits for a CSS class name.
+ * Compute all rename edits for a CSS class name, with BEM cascade.
  *
- * Collects:
- *  1. All CSS/SCSS definitions of the class (from the index)
- *  2. All template references (HTML class="", Vue :class, React className)
+ * When renaming a BEM block (e.g. "overlay"), all classes that start with
+ * that block prefix are included:
+ *   overlay, overlay__spacer, overlay--active, overlay__spacer--big
  *
- * Handles SCSS nested definitions by computing the correct edit range
- * and attaching `parentPrefix` so the server can produce the right new text.
+ * When renaming an element (e.g. "overlay__spacer"), modifiers of that
+ * element are included:
+ *   overlay__spacer, overlay__spacer--big
  *
- * When `config.renameScope` is "file", only edits in `currentFilePath` are returned.
+ * For each affected class, we collect:
+ *   1. CSS/SCSS definitions (from the index)
+ *   2. Template references (HTML/Vue/React)
+ *
+ * Each edit carries `originalClassName` so the server can compute the
+ * correct replacement text by substituting the old prefix with the new one.
  */
 export async function getRename(
   className: string,
@@ -195,64 +217,129 @@ export async function getRename(
   const edits: RenameEdit[] = [];
   const fileScope = config.renameScope === "file" ? currentFilePath : undefined;
 
-  // 1. Collect all CSS definitions from the index
-  const defs = index.lookup(className);
-  for (const def of defs) {
-    if (fileScope && def.filePath !== fileScope) continue;
-    const edit = definitionToEdit(def);
-    if (edit) edits.push(edit);
+  // Determine all affected class names (BEM cascade)
+  const affectedClasses = collectBemCascade(className, index, config);
+
+  // 1. Collect CSS definitions for all affected classes
+  for (const cls of affectedClasses) {
+    const defs = index.lookup(cls);
+    for (const def of defs) {
+      if (fileScope && def.filePath !== fileScope) continue;
+      const edit = definitionToEdit(def);
+      if (edit) {
+        edit.originalClassName = cls;
+        edits.push(edit);
+      }
+    }
   }
 
-  // 2. Collect all template references
+  // 2. Collect template references for all affected classes
+  const affectedSet = new Set(affectedClasses);
+  const templateRefs = await collectTemplateRefs(workspaceRoot, config, fileScope, openDocuments);
+
+  for (const ref of templateRefs) {
+    if (affectedSet.has(ref.className)) {
+      edits.push({
+        filePath: ref.filePath,
+        line: ref.line,
+        column: ref.column,
+        endColumn: ref.endColumn,
+        originalClassName: ref.className,
+      });
+    }
+  }
+
+  return { oldName: className, edits };
+}
+
+/**
+ * Collect all class names affected by renaming `className` (BEM cascade).
+ *
+ * If `className` is a BEM block → include block + all block__* and block--*
+ * If `className` is a BEM element → include element + all element--*
+ * If `className` is a full BEM (block__elem--mod) → just that class
+ * If BEM is disabled → just that class
+ */
+function collectBemCascade(
+  className: string,
+  index: CssClassIndex,
+  config: CssClassesConfig,
+): string[] {
+  if (!config.bemEnabled) return [className];
+
+  const elemSep = config.bemSeparators.element;
+  const modSep = config.bemSeparators.modifier;
+  const parts = parseBem(className, elemSep, modSep);
+
+  if (!parts) return [className];
+
+  const allClasses = index.allClassNames();
+  const result: string[] = [className];
+
+  if (!parts.element && !parts.modifier) {
+    // className is a plain block → cascade to all block__* and block--*
+    const blockPrefix = className + elemSep;
+    const blockModPrefix = className + modSep;
+    for (const cls of allClasses) {
+      if (cls === className) continue;
+      if (cls.startsWith(blockPrefix) || cls.startsWith(blockModPrefix)) {
+        result.push(cls);
+      }
+    }
+  } else if (parts.element && !parts.modifier) {
+    // className is block__element → cascade to all block__element--*
+    const elemModPrefix = className + modSep;
+    for (const cls of allClasses) {
+      if (cls === className) continue;
+      if (cls.startsWith(elemModPrefix)) {
+        result.push(cls);
+      }
+    }
+  }
+  // If it already has a modifier, no further cascade needed
+
+  return result;
+}
+
+/**
+ * Collect all template references across the workspace (or scoped to a file).
+ */
+async function collectTemplateRefs(
+  workspaceRoot: string,
+  config: CssClassesConfig,
+  fileScope?: string,
+  openDocuments?: Map<string, string>,
+): Promise<CssClassReference[]> {
+  const allRefs: CssClassReference[] = [];
+
   if (fileScope) {
-    // Only parse the current file
     const content = openDocuments?.get(fileScope);
     if (content) {
       const lang = getFileLanguage(fileScope, config);
       if (lang && lang !== "css") {
         const refs = await parseRefsForFile(content, fileScope, lang, config);
-        for (const ref of refs) {
-          if (ref.className === className) {
-            edits.push({
-              filePath: ref.filePath,
-              line: ref.line,
-              column: ref.column,
-              endColumn: ref.endColumn,
-            });
-          }
-        }
+        allRefs.push(...refs);
       }
     }
-  } else {
-    // Workspace-wide: scan all template files
-    const files = await scanTemplateFiles(workspaceRoot, config);
-    const allRefs = await Promise.all(
-      files.map(async (filePath) => {
-        const content = openDocuments?.get(filePath) ?? (await readFileContent(filePath));
-        if (!content) return [];
-
-        const lang = getFileLanguage(filePath, config);
-        if (!lang || lang === "css") return [];
-
-        return parseRefsForFile(content, filePath, lang, config);
-      }),
-    );
-
-    for (const fileRefs of allRefs) {
-      for (const ref of fileRefs) {
-        if (ref.className === className) {
-          edits.push({
-            filePath: ref.filePath,
-            line: ref.line,
-            column: ref.column,
-            endColumn: ref.endColumn,
-          });
-        }
-      }
-    }
+    return allRefs;
   }
 
-  return { oldName: className, edits };
+  // Workspace-wide
+  const files = await scanTemplateFiles(workspaceRoot, config);
+  const results = await Promise.all(
+    files.map(async (filePath) => {
+      const content = openDocuments?.get(filePath) ?? (await readFileContent(filePath));
+      if (!content) return [];
+      const lang = getFileLanguage(filePath, config);
+      if (!lang || lang === "css") return [];
+      return parseRefsForFile(content, filePath, lang, config);
+    }),
+  );
+
+  for (const fileRefs of results) {
+    allRefs.push(...fileRefs);
+  }
+  return allRefs;
 }
 
 // ─── Definition → Edit Conversion ────────────────────────────────────────────
@@ -430,24 +517,62 @@ async function parseRefsForFile(
 }
 
 /**
- * Compute the new text for a rename edit, given the user's new class name.
+ * Compute the new text for a rename edit.
  *
- * For plain edits (no `parentPrefix`): returns `newName` as-is.
- * For SCSS nested edits: returns `"&" + newName.slice(parentPrefix.length)`.
- * If the new name doesn't share the same parent prefix, returns the full new name
- * (which will break the SCSS nesting, but is the user's explicit intent).
+ * Handles three cases:
+ *  1. SCSS nested edit (`parentPrefix` set): preserves `&` syntax.
+ *     The parentPrefix is also affected by the rename (it's the old parent),
+ *     so `&` will stand for the NEW parent after the rename.
+ *  2. BEM cascade edit (`originalClassName` differs from `oldName`):
+ *     replaces the old prefix portion with the new name
+ *  3. Plain edit: returns `newName` as-is
  */
-export function computeNewText(edit: RenameEdit, newName: string): string {
-  if (!edit.parentPrefix) {
-    return newName;
+export function computeNewText(edit: RenameEdit, oldName: string, newName: string): string {
+  const original = edit.originalClassName ?? oldName;
+
+  // First compute what the full new class name should be
+  const newFullClass = replacePrefix(original, oldName, newName);
+
+  // Case 1: SCSS nested definition with `&`
+  if (edit.parentPrefix) {
+    // The parentPrefix is the OLD parent (e.g. "block").
+    // After rename, the parent `.block` becomes `.card`, so `&` = "card".
+    const newParentPrefix = replacePrefix(edit.parentPrefix, oldName, newName);
+    if (newFullClass.startsWith(newParentPrefix)) {
+      return "&" + newFullClass.slice(newParentPrefix.length);
+    }
+    // Can't preserve & nesting after this rename
+    return newFullClass;
   }
 
-  if (newName.startsWith(edit.parentPrefix)) {
-    return "&" + newName.slice(edit.parentPrefix.length);
-  }
+  // Case 2 & 3: template ref or CSS def — use the computed full new class
+  return newFullClass;
+}
 
-  // The user changed the prefix part too — we can't keep the `&` nesting.
-  // Return the full new name (will break the SCSS nesting structure, but
-  // at least produces a valid CSS class; user can restructure manually).
-  return newName;
+/**
+ * Replace the `oldPrefix` at the start of `fullName` with `newPrefix`.
+ * E.g. replacePrefix("block__element", "block", "card") → "card__element"
+ * If `fullName` doesn't start with `oldPrefix`, returns `fullName` unchanged.
+ */
+function replacePrefix(fullName: string, oldPrefix: string, newPrefix: string): string {
+  if (fullName === oldPrefix) return newPrefix;
+  if (fullName.startsWith(oldPrefix)) {
+    return newPrefix + fullName.slice(oldPrefix.length);
+  }
+  return fullName;
+}
+
+/**
+ * Convert a character offset to line/col.
+ */
+function offsetToLineCol(content: string, offset: number): { line: number; col: number } {
+  const lines = content.split("\n");
+  let charCount = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (charCount + lines[i].length >= offset) {
+      return { line: i, col: offset - charCount };
+    }
+    charCount += lines[i].length + 1;
+  }
+  return { line: 0, col: 0 };
 }
