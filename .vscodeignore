@@ -3,6 +3,7 @@
 .envrc
 .editorconfig
 .gitignore
+result
 .vscode
 src/**
 test/**
