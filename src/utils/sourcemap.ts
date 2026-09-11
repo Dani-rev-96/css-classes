@@ -36,7 +36,8 @@ interface DecodedSegment {
 type DecodedMappings = DecodedSegment[][];
 
 // VLQ character set
-const VLQ_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const VLQ_CHARS =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const VLQ_LOOKUP = new Map<string, number>();
 for (let i = 0; i < VLQ_CHARS.length; i++) {
   VLQ_LOOKUP.set(VLQ_CHARS[i], i);
@@ -49,7 +50,10 @@ const VLQ_SHIFT = 5;
  * Decode a single VLQ value from a mappings string.
  * Returns the decoded integer and the new position.
  */
-function decodeVlq(mappings: string, pos: number): [value: number, newPos: number] {
+function decodeVlq(
+  mappings: string,
+  pos: number,
+): [value: number, newPos: number] {
   let result = 0;
   let shift = 0;
 
@@ -122,7 +126,11 @@ function decodeMappings(mappings: string): DecodedMappings {
     segment.generatedColumn = generatedColumn;
 
     // Check if there are more fields
-    if (pos < mappings.length && mappings[pos] !== "," && mappings[pos] !== ";") {
+    if (
+      pos < mappings.length &&
+      mappings[pos] !== "," &&
+      mappings[pos] !== ";"
+    ) {
       // Field 2: source index
       [value, pos] = decodeVlq(mappings, pos);
       sourceIndex += value;
@@ -139,7 +147,11 @@ function decodeMappings(mappings: string): DecodedMappings {
       segment.originalColumn = originalColumn;
 
       // Field 5: name index (optional)
-      if (pos < mappings.length && mappings[pos] !== "," && mappings[pos] !== ";") {
+      if (
+        pos < mappings.length &&
+        mappings[pos] !== "," &&
+        mappings[pos] !== ";"
+      ) {
         [value, pos] = decodeVlq(mappings, pos);
         nameIndex += value;
         segment.nameIndex = nameIndex;
@@ -173,6 +185,26 @@ export function parseSourceMap(content: string): SourceMap | null {
 }
 
 /**
+ * Cache of decoded mappings per SourceMap object, so repeated position lookups
+ * for the same file (e.g. one per class definition during indexing) decode the
+ * VLQ mappings string only once instead of once per lookup.
+ */
+const decodedCache = new WeakMap<SourceMap, DecodedMappings>();
+
+function getDecodedMappings(map: SourceMap): DecodedMappings | null {
+  const cached = decodedCache.get(map);
+  if (cached) return cached;
+  try {
+    const decoded = decodeMappings(map.mappings);
+    decodedCache.set(map, decoded);
+    return decoded;
+  } catch {
+    // Malformed mappings string (invalid VLQ characters etc.) — treat as unmapped
+    return null;
+  }
+}
+
+/**
  * Resolve a generated position back to the original source position.
  *
  * @param map - The parsed source map
@@ -187,26 +219,35 @@ export function resolveOriginalPosition(
   generatedColumn: number,
   mapFilePath: string,
 ): SourceMapMapping | null {
-  const decoded = decodeMappings(map.mappings);
+  const decoded = getDecodedMappings(map);
+  if (!decoded) return null;
 
   if (generatedLine >= decoded.length) return null;
 
   const lineSegments = decoded[generatedLine];
   if (lineSegments.length === 0) return null;
 
-  // Binary search for the segment closest to (but not after) the generated column
-  let bestSegment: DecodedSegment | null = null;
-
-  for (const segment of lineSegments) {
-    if (segment.generatedColumn <= generatedColumn) {
-      bestSegment = segment;
+  // Binary search for the segment closest to (but not after) the generated column.
+  // Segments are sorted by generated column.
+  let lo = 0;
+  let hi = lineSegments.length - 1;
+  let bestIdx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lineSegments[mid].generatedColumn <= generatedColumn) {
+      bestIdx = mid;
+      lo = mid + 1;
     } else {
-      break; // segments are sorted by generated column
+      hi = mid - 1;
     }
   }
 
-  if (!bestSegment) {
-    // Use the first segment on this line as fallback
+  let bestSegment: DecodedSegment;
+  if (bestIdx >= 0) {
+    bestSegment = lineSegments[bestIdx];
+  } else {
+    // No segment starts at or before the generated column —
+    // use the first segment on this line as fallback
     bestSegment = lineSegments[0];
   }
 
@@ -246,9 +287,7 @@ export async function findSourceMap(
 
     // Inline data URI
     if (url.startsWith("data:")) {
-      const base64Match = url.match(
-        /^data:[^;]*;base64,(.+)$/,
-      );
+      const base64Match = url.match(/^data:[^;]*;base64,(.+)$/);
       if (base64Match) {
         const decoded = Buffer.from(base64Match[1], "base64").toString("utf-8");
         const map = parseSourceMap(decoded);

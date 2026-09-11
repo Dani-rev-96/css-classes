@@ -1,31 +1,47 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import fg from "fast-glob";
+import ignore from "ignore";
 import type { CssClassesConfig } from "../types.js";
 
 /**
- * Read .gitignore from the workspace root and convert patterns to glob ignore patterns.
+ * Read the workspace-root .gitignore and return a matcher with real git
+ * semantics: root-anchored vs unanchored patterns, `!` negation, and
+ * last-match-wins.
+ *
+ * The previous hand-rolled glob conversion dropped every `!` negation pattern
+ * and prefixed non-rooted patterns with a recursive glob, which over-excluded
+ * in monorepos (a root gitignore entry `src/generated` also excluded
+ * `packages/foo/src/generated`). Returns null when no gitignore file exists.
+ *
+ * Limitation (unchanged): only the workspace-root .gitignore is read; nested
+ * .gitignore files are not honored.
  */
-function readGitignorePatterns(workspaceRoot: string): string[] {
+function loadGitignore(workspaceRoot: string) {
   const gitignorePath = path.join(workspaceRoot, ".gitignore");
   try {
     const content = fs.readFileSync(gitignorePath, "utf-8");
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("!"))
-      .flatMap((pattern) => {
-        const clean = pattern.replace(/\/$/, "");
-        if (clean.startsWith("/")) {
-          // Rooted pattern — relative to workspace root
-          return [clean.slice(1), clean.slice(1) + "/**"];
-        }
-        // Non-rooted — can match in any subdirectory
-        return ["**/" + clean, "**/" + clean + "/**"];
-      });
+    return ignore().add(content);
   } catch {
-    return [];
+    return null;
   }
+}
+
+/** Build a safe relative-path ignore predicate from a matcher (or always-false). */
+function makeGitignoreFilter(
+  workspaceRoot: string,
+  matcher: ReturnType<typeof loadGitignore>,
+): (absFile: string) => boolean {
+  if (!matcher) return () => false;
+  return (absFile: string): boolean => {
+    const rel = path.relative(workspaceRoot, absFile);
+    if (!rel || rel.startsWith("..")) return false;
+    try {
+      return matcher.ignores(rel);
+    } catch {
+      return false;
+    }
+  };
 }
 
 /**
@@ -36,20 +52,20 @@ export async function scanWorkspace(
   config: CssClassesConfig,
 ): Promise<string[]> {
   const patterns = config.includePatterns;
-  const ignore = [
-    ...config.excludePatterns,
-    ...(config.respectGitignore ? readGitignorePatterns(workspaceRoot) : []),
-  ];
+  const gitignoreFilter = makeGitignoreFilter(
+    workspaceRoot,
+    config.respectGitignore ? loadGitignore(workspaceRoot) : null,
+  );
 
   const files = await fg(patterns, {
     cwd: workspaceRoot,
-    ignore,
+    ignore: config.excludePatterns,
     absolute: true,
     onlyFiles: true,
     followSymbolicLinks: false,
   });
 
-  return files;
+  return files.filter((f) => !gitignoreFilter(f));
 }
 
 /**
@@ -68,26 +84,28 @@ export async function scanTemplateFiles(
   if (extensions.length === 0) return [];
 
   const pattern = `**/*{${extensions.join(",")}}`;
-  const ignore = [
-    ...config.excludePatterns,
-    ...(config.respectGitignore ? readGitignorePatterns(workspaceRoot) : []),
-  ];
+  const gitignoreFilter = makeGitignoreFilter(
+    workspaceRoot,
+    config.respectGitignore ? loadGitignore(workspaceRoot) : null,
+  );
 
   const files = await fg(pattern, {
     cwd: workspaceRoot,
-    ignore,
+    ignore: config.excludePatterns,
     absolute: true,
     onlyFiles: true,
     followSymbolicLinks: false,
   });
 
-  return files;
+  return files.filter((f) => !gitignoreFilter(f));
 }
 
 /**
  * Read a file and return its contents, or null if it doesn't exist.
  */
-export async function readFileContent(filePath: string): Promise<string | null> {
+export async function readFileContent(
+  filePath: string,
+): Promise<string | null> {
   try {
     return await fs.promises.readFile(filePath, "utf-8");
   } catch {

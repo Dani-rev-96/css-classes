@@ -36,20 +36,47 @@ export function parseReactClasses(
 }
 
 /**
+ * Single-entry cache of line-start offsets for the most recently converted text.
+ * All calls within one parse share the same content string, so this turns the
+ * previous O(n)-per-reference scan into O(1) after the first build.
+ */
+let cachedLineText = "";
+let cachedLineStarts: number[] = [0];
+
+function getLineStarts(text: string): number[] {
+  if (text !== cachedLineText) {
+    cachedLineText = text;
+    const starts: number[] = [0];
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === "\n") starts.push(i + 1);
+    }
+    cachedLineStarts = starts;
+  }
+  return cachedLineStarts;
+}
+
+/**
  * Convert a character offset to a line+col pair within text.
  */
-function offsetToLineCol(text: string, offset: number): { line: number; col: number } {
+function offsetToLineCol(
+  text: string,
+  offset: number,
+): { line: number; col: number } {
+  const starts = getLineStarts(text);
+  // Binary search for the last line start <= offset
+  let lo = 0;
+  let hi = starts.length - 1;
   let line = 0;
-  let col = 0;
-  for (let i = 0; i < offset && i < text.length; i++) {
-    if (text[i] === "\n") {
-      line++;
-      col = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid] <= offset) {
+      line = mid;
+      lo = mid + 1;
     } else {
-      col++;
+      hi = mid - 1;
     }
   }
-  return { line, col };
+  return { line, col: offset - starts[line] };
 }
 
 /**
@@ -65,7 +92,11 @@ function parseStaticClassName(
 
   while ((match = regex.exec(content)) !== null) {
     const classValue = match[1] ?? match[2] ?? "";
-    const quoteChar = match[0].includes('"') ? '"' : "'";
+    // Group 1 is only populated for double-quoted values; decide the quote
+    // character from the capture groups, NOT from whether the matched text
+    // contains a '"' anywhere (a single-quoted value may legally contain
+    // double quotes, which would shift valueStart into the middle of the value).
+    const quoteChar = match[1] !== undefined ? '"' : "'";
     const valueStart = match.index + match[0].indexOf(quoteChar) + 1;
 
     extractClassNames(classValue, filePath, content, valueStart, refs);
@@ -177,7 +208,10 @@ function parseCssModuleAccess(
  * Extract a brace-delimited expression from content, handling nesting.
  * Works across multiple lines.
  */
-function extractBracedExpression(content: string, start: number): string | null {
+function extractBracedExpression(
+  content: string,
+  start: number,
+): string | null {
   if (content[start] !== "{") return null;
   let depth = 0;
   for (let i = start; i < content.length; i++) {
@@ -279,11 +313,21 @@ function extractTemplateLiteralClasses(
     let segmentStart = 0;
 
     while (pos < templateBody.length) {
-      if (templateBody[pos] === "$" && pos + 1 < templateBody.length && templateBody[pos + 1] === "{") {
+      if (
+        templateBody[pos] === "$" &&
+        pos + 1 < templateBody.length &&
+        templateBody[pos + 1] === "{"
+      ) {
         // Extract static segment before the interpolation
         if (pos > segmentStart) {
           const segment = templateBody.slice(segmentStart, pos);
-          extractClassNames(segment, filePath, fullContent, templateStart + segmentStart, refs);
+          extractClassNames(
+            segment,
+            filePath,
+            fullContent,
+            templateStart + segmentStart,
+            refs,
+          );
         }
 
         // Find matching closing brace for the interpolation
@@ -301,7 +345,13 @@ function extractTemplateLiteralClasses(
         if (i > pos + 2) {
           const interpolationExpr = templateBody.slice(pos + 2, i);
           const interpolationOffset = templateStart + pos + 2;
-          extractStringLiterals(interpolationExpr, filePath, fullContent, interpolationOffset, refs);
+          extractStringLiterals(
+            interpolationExpr,
+            filePath,
+            fullContent,
+            interpolationOffset,
+            refs,
+          );
         }
 
         pos = i + 1;
@@ -314,7 +364,13 @@ function extractTemplateLiteralClasses(
     // Extract trailing static segment
     if (segmentStart < templateBody.length) {
       const segment = templateBody.slice(segmentStart);
-      extractClassNames(segment, filePath, fullContent, templateStart + segmentStart, refs);
+      extractClassNames(
+        segment,
+        filePath,
+        fullContent,
+        templateStart + segmentStart,
+        refs,
+      );
     }
   }
 }

@@ -1,4 +1,11 @@
-import type { CssClassDefinition, CssClassesConfig, ScssDirectives, ScssMixin, ScssExtend, ScssInclude } from "../types.js";
+import type {
+  CssClassDefinition,
+  CssClassesConfig,
+  ScssDirectives,
+  ScssMixin,
+  ScssExtend,
+  ScssInclude,
+} from "../types.js";
 import { parseBem } from "../utils/bem.js";
 
 /**
@@ -32,13 +39,16 @@ export function parseCssClasses(
   }
 
   const scopeStack: ScopeFrame[] = [];
-  let currentSelectors: string[] = [];
   let selectorBuffer = "";
   let selectorStartLine = 0;
   let selectorStartCol = 0;
   let inComment = false;
-  let inLineComment = false;
+  // Reset at the start of every line below; the declaration needs no initializer.
+  let inLineComment: boolean;
   let inString: string | false = false;
+  // Tracks parenthesis depth so `//` inside url(http://…) is not mistaken for
+  // a line comment (which would swallow the rest of the line, including `}`).
+  let parenDepth = 0;
 
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx];
@@ -73,7 +83,7 @@ export function parseCssClasses(
         continue;
       }
 
-      if (ch === "/" && next === "/") {
+      if (ch === "/" && next === "/" && parenDepth === 0) {
         inLineComment = true;
         continue;
       }
@@ -83,9 +93,19 @@ export function parseCssClasses(
         continue;
       }
 
+      if (ch === "(") parenDepth++;
+      else if (ch === ")" && parenDepth > 0) parenDepth--;
+
       // Track selector starts (use trimmed length so leading whitespace doesn't
       // prevent detection of the real selector start position)
-      if (selectorBuffer.trim().length === 0 && ch !== " " && ch !== "\t" && ch !== "{" && ch !== "}" && ch !== ";") {
+      if (
+        selectorBuffer.trim().length === 0 &&
+        ch !== " " &&
+        ch !== "\t" &&
+        ch !== "{" &&
+        ch !== "}" &&
+        ch !== ";"
+      ) {
         selectorStartLine = lineIdx;
         selectorStartCol = col;
       }
@@ -98,14 +118,17 @@ export function parseCssClasses(
         if (rawSelector) {
           const resolvedSelectors = resolveSelectors(
             rawSelector,
-            scopeStack.length > 0 ? scopeStack[scopeStack.length - 1].selectors : [],
+            scopeStack.length > 0
+              ? scopeStack[scopeStack.length - 1].selectors
+              : [],
             resolveNesting,
           );
 
           // Collect parent classes to avoid re-registering them at nested levels
           const parentClasses = new Set<string>();
           if (scopeStack.length > 0) {
-            for (const parentSel of scopeStack[scopeStack.length - 1].selectors) {
+            for (const parentSel of scopeStack[scopeStack.length - 1]
+              .selectors) {
               for (const cls of extractClassesFromSelector(parentSel)) {
                 parentClasses.add(cls);
               }
@@ -120,7 +143,9 @@ export function parseCssClasses(
               if (parentClasses.has(cls)) continue; // Already defined by parent scope
               if (seen.has(cls)) continue; // Avoid duplicates from comma-separated parents
               seen.add(cls);
-              const bem = bemEnabled ? parseBem(cls, elementSep, modifierSep) : null;
+              const bem = bemEnabled
+                ? parseBem(cls, elementSep, modifierSep)
+                : null;
               classes.push({
                 className: cls,
                 filePath,
@@ -139,11 +164,13 @@ export function parseCssClasses(
             selectors: resolvedSelectors,
             line: lineIdx,
           });
-          currentSelectors = resolvedSelectors;
         } else {
           // Empty selector (e.g., @media block)
           scopeStack.push({
-            selectors: scopeStack.length > 0 ? scopeStack[scopeStack.length - 1].selectors : [],
+            selectors:
+              scopeStack.length > 0
+                ? scopeStack[scopeStack.length - 1].selectors
+                : [],
             line: lineIdx,
           });
         }
@@ -252,7 +279,8 @@ function extractClassesFromSelector(selector: string): string[] {
 export function extractStyleBlocks(
   content: string,
 ): Array<{ content: string; lineOffset: number; lang: string }> {
-  const blocks: Array<{ content: string; lineOffset: number; lang: string }> = [];
+  const blocks: Array<{ content: string; lineOffset: number; lang: string }> =
+    [];
   const regex = /<style([^>]*)>([\s\S]*?)<\/style>/gi;
   let match: RegExpExecArray | null;
 
@@ -267,7 +295,10 @@ export function extractStyleBlocks(
     const lang = langMatch ? langMatch[1] : "css";
 
     // Count the lines of the opening <style> tag itself
-    const openingTag = content.slice(match.index, match.index + match[0].indexOf(">") + 1);
+    const openingTag = content.slice(
+      match.index,
+      match.index + match[0].indexOf(">") + 1,
+    );
     const tagLines = openingTag.split("\n").length - 1;
 
     blocks.push({
@@ -300,9 +331,12 @@ export function parseScssDirectives(
   // Track nesting to determine current class context
   const scopeStack: string[] = []; // stack of current selector contexts
   let inComment = false;
-  let inLineComment = false;
+  // Reset at the start of every line below; the declaration needs no initializer.
+  let inLineComment: boolean;
   let inString: string | false = false;
   let selectorBuffer = "";
+  // Paren depth so url(http://…) is not treated as a `//` line comment
+  let parenDepth = 0;
 
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx];
@@ -398,7 +432,7 @@ export function parseScssDirectives(
         continue;
       }
 
-      if (ch === "/" && next === "/") {
+      if (ch === "/" && next === "/" && parenDepth === 0) {
         inLineComment = true;
         continue;
       }
@@ -407,6 +441,9 @@ export function parseScssDirectives(
         inString = ch;
         continue;
       }
+
+      if (ch === "(") parenDepth++;
+      else if (ch === ")" && parenDepth > 0) parenDepth--;
 
       if (ch === "{") {
         const rawSelector = selectorBuffer.trim();
@@ -437,27 +474,39 @@ export function parseScssDirectives(
 }
 
 /**
+ * Return the last (subject) class name in a selector.
+ * E.g. ".a .b" -> "b", ".x.y" -> "y". The subject of a selector is its
+ * right-most simple selector, not the first class encountered.
+ */
+function lastClassInSelector(selector: string): string | null {
+  let last: string | null = null;
+  const regex = /\.(-?[_a-zA-Z][-\w]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(selector)) !== null) {
+    last = m[1];
+  }
+  return last;
+}
+
+/**
  * Determine the current class name context from the scope stack.
- * Returns the most recent class-like selector, resolving & nesting.
+ * Returns the subject class of the nearest class selector, resolving & nesting.
  */
 function getCurrentClassContext(scopeStack: string[]): string | null {
   // Walk the scope stack from inside out to find the nearest class selector
   for (let i = scopeStack.length - 1; i >= 0; i--) {
     const selector = scopeStack[i];
-    // Extract class names from the selector
-    const classMatch = selector.match(/\.(-?[_a-zA-Z][-\w]*)/);
-    if (classMatch) {
-      // If it contains &, try to resolve with parent
-      if (selector.includes("&") && i > 0) {
-        const parentCtx = getCurrentClassContext(scopeStack.slice(0, i));
-        if (parentCtx) {
-          const resolved = selector.replace(/&/g, "." + parentCtx);
-          const resolvedMatch = resolved.match(/\.(-?[_a-zA-Z][-\w]*)/);
-          if (resolvedMatch) return resolvedMatch[1];
-        }
+    // If it contains &, try to resolve with parent
+    if (selector.includes("&") && i > 0) {
+      const parentCtx = getCurrentClassContext(scopeStack.slice(0, i));
+      if (parentCtx) {
+        const resolved = selector.replace(/&/g, "." + parentCtx);
+        const resolvedMatch = lastClassInSelector(resolved);
+        if (resolvedMatch) return resolvedMatch;
       }
-      return classMatch[1];
     }
+    const last = lastClassInSelector(selector);
+    if (last) return last;
   }
   return null;
 }

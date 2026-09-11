@@ -16,9 +16,15 @@ tsconfig.json
 tsconfig.build.json
 vitest.config.ts
 esbuild.mjs
+eslint.config.mjs
 **/*.map
 **/*.ts
 **/*.d.ts
 **/*.d.ts.map
+# Ship only the esbuild bundles + tree-sitter WASM grammars from dist/.
+# Without this, stale `tsc` output (dist/types.js, dist/config.js, …) that
+# nothing imports gets packaged into the .vsix as dead weight.
+dist/**
 !dist/extension.js
 !dist/server.js
+!dist/*.wasm

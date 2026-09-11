@@ -49,14 +49,26 @@ function collectClassAttributes(
         // The attribute_value is inside the quotes
         const innerNode = findChildByType(valueNode, "attribute_value");
         if (innerNode) {
-          extractClassNames(innerNode.text, filePath, innerNode.startPosition.row, innerNode.startPosition.column, refs);
+          extractClassNames(
+            innerNode.text,
+            filePath,
+            innerNode.startPosition.row,
+            innerNode.startPosition.column,
+            refs,
+          );
         } else {
           // Some tree-sitter versions put the text directly in quoted_attribute_value
           // Strip quotes manually
           const text = valueNode.text;
           const stripped = text.slice(1, -1); // remove quotes
           const startCol = valueNode.startPosition.column + 1; // skip opening quote
-          extractClassNames(stripped, filePath, valueNode.startPosition.row, startCol, refs);
+          extractClassNames(
+            stripped,
+            filePath,
+            valueNode.startPosition.row,
+            startCol,
+            refs,
+          );
         }
       }
     }
@@ -92,7 +104,6 @@ function extractClassNames(
   // Handle multi-line values
   const lines = classValue.split("\n");
   let currentLine = startLine;
-  let currentOffset = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
@@ -114,6 +125,5 @@ function extractClassNames(
     }
 
     currentLine++;
-    currentOffset += lineText.length + 1; // +1 for newline
   }
 }

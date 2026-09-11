@@ -14,6 +14,7 @@ import {
 	CompletionItemKind,
 	DidChangeConfigurationParams,
 	DidChangeWatchedFilesNotification,
+	Disposable,
 	MarkupKind,
 	Location,
 	Range,
@@ -47,11 +48,16 @@ import { resolveConfig } from "./config.js";
 import type { CssClassesConfig, CssClassReference } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import { getFileLanguage } from "./scanner/workspace-scanner.js";
-import { extractStyleBlocks } from "./parsers/css-parser.js";
 import { parseHtmlClasses } from "./parsers/html-parser.js";
 import { parseVueClasses } from "./parsers/vue-parser.js";
 import { parseReactClasses } from "./parsers/react-parser.js";
-import { initTreeSitter, preloadGrammars, tsParseHtmlClasses, tsParseReactClasses, tsParseVueClasses } from "./parsers/treesitter/index.js";
+import {
+	initTreeSitter,
+	preloadGrammars,
+	tsParseHtmlClasses,
+	tsParseReactClasses,
+	tsParseVueClasses,
+} from "./parsers/treesitter/index.js";
 
 // Create connection and document manager
 const connection = createConnection(ProposedFeatures.all);
@@ -64,56 +70,118 @@ let indexReady = false;
 let indexingInProgress: Promise<void> | null = null;
 
 /**
+ * Serializes ALL index mutations (full re-index, per-file re-index, embedded
+ * style updates) through a single promise chain.
+ *
+ * Without this, a save/watch event landing mid-way through a full re-index
+ * could interleave with it: `indexWorkspace` reads file contents up front,
+ * so a fresh save applied during the re-index would later be overwritten by
+ * the re-index's stale pre-save content. Chaining every mutation guarantees
+ * last-writer-wins in event order.
+ */
+let indexMutationChain: Promise<void> = Promise.resolve();
+
+function serializeIndex(task: () => Promise<void>): Promise<void> {
+	// Run the task regardless of whether the previous chained task rejected.
+	const result = indexMutationChain.then(task, task);
+	// Keep the chain alive no matter what this task does.
+	indexMutationChain = result.catch(() => undefined);
+	return result;
+}
+
+/**
  * Wait for any in-progress indexing to complete.
  * Returns true if the index is ready, false otherwise.
  */
 async function waitForIndex(): Promise<boolean> {
 	if (indexReady) return true;
 	if (indexingInProgress) {
-		try { await indexingInProgress; } catch { /* ignore */ }
+		try {
+			await indexingInProgress;
+		} catch {
+			/* ignore */
+		}
 	}
 	return indexReady;
 }
 
 /**
- * Serialize workspace indexing to prevent concurrent indexWorkspace calls
- * from clearing and corrupting each other's work. After indexing completes,
- * re-publish diagnostics for all open documents.
+ * Full workspace re-index, serialized against every other index mutation via
+ * `serializeIndex`. After indexing completes, re-publish diagnostics for all
+ * open documents.
  */
 async function safeIndexWorkspace(): Promise<void> {
-	// If an indexing operation is already in progress, wait for it to finish
-	// then start a new one (the new config/state should take effect)
-	if (indexingInProgress) {
-		try { await indexingInProgress; } catch { /* ignore */ }
+	await serializeIndex(async () => {
+		indexReady = false;
+
+		const p = (async () => {
+			if (!workspaceRoot) return;
+			await classIndex.indexWorkspace(workspaceRoot);
+		})();
+
+		indexingInProgress = p;
+
+		try {
+			await p;
+			indexReady = true;
+			connection.console.log(
+				`[css-classes-lsp] Indexed ${classIndex.size} unique classes (${classIndex.totalDefinitions} definitions)`,
+			);
+			// Re-publish diagnostics for all currently open documents
+			for (const doc of documents.all()) {
+				publishDiagnostics(doc);
+			}
+		} catch (err) {
+			connection.console.error(`[css-classes-lsp] Indexing error: ${err}`);
+			// Restore indexReady so previously indexed data (if any) can still be used
+			indexReady = true;
+		} finally {
+			if (indexingInProgress === p) {
+				indexingInProgress = null;
+			}
+		}
+	});
+}
+
+// ─── File Watching ──────────────────────────────────────────────────────────────
+
+let cssFileWatcherRegistration: Disposable | null = null;
+
+/**
+ * Register (or re-register) watched-file notifications for the stylesheet
+ * extensions from the current config.
+ *
+ * Previously the globs were hardcoded to css/scss only, so custom
+ * `cssClasses.extensions.css` entries (e.g. `.sass`) were never watched for
+ * changes even though they were indexed.
+ */
+async function registerCssFileWatchers(): Promise<void> {
+	if (cssFileWatcherRegistration) {
+		try {
+			await cssFileWatcherRegistration.dispose();
+		} catch {
+			/* ignore */
+		}
+		cssFileWatcherRegistration = null;
 	}
 
-	indexReady = false;
+	const extensions =
+		config.extensions.css.length > 0 ? config.extensions.css : [".css", ".scss"];
 
-	const p = (async () => {
-		if (!workspaceRoot) return;
-		await classIndex.indexWorkspace(workspaceRoot);
-	})();
-
-	indexingInProgress = p;
+	const watchers = extensions.map((ext) => ({
+		globPattern: `**/*${ext.startsWith(".") ? ext : `.${ext}`}`,
+	}));
 
 	try {
-		await p;
-		indexReady = true;
-		connection.console.log(
-			`[css-classes-lsp] Indexed ${classIndex.size} unique classes (${classIndex.totalDefinitions} definitions)`,
+		cssFileWatcherRegistration = await connection.client.register(
+			DidChangeWatchedFilesNotification.type,
+			{ watchers },
 		);
-		// Re-publish diagnostics for all currently open documents
-		for (const doc of documents.all()) {
-			publishDiagnostics(doc);
-		}
-	} catch (err) {
-		connection.console.error(`[css-classes-lsp] Indexing error: ${err}`);
-		// Restore indexReady so previously indexed data (if any) can still be used
-		indexReady = true;
-	} finally {
-		if (indexingInProgress === p) {
-			indexingInProgress = null;
-		}
+	} catch {
+		// File watching registration may not be supported by all clients
+		connection.console.log(
+			"[css-classes-lsp] File watching registration failed, using document sync only.",
+		);
 	}
 }
 
@@ -165,25 +233,22 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 });
 
 connection.onInitialized(async () => {
-	// Register for file watching (CSS/SCSS files)
-	connection.client
-		.register(DidChangeWatchedFilesNotification.type, {
-			watchers: [{ globPattern: "**/*.css" }, { globPattern: "**/*.scss" }],
-		})
-		.catch(() => {
-			// File watching registration may not be supported by all clients
-			connection.console.log(
-				"[css-classes-lsp] File watching registration failed, using document sync only.",
-			);
-		});
+	// Register for file watching based on the configured stylesheet extensions
+	// (previously hardcoded to .css/.scss, so custom `cssClasses.extensions.css`
+	// entries like .sass were never watched for changes).
+	await registerCssFileWatchers();
 
 	// Initialize tree-sitter if experimental flag is enabled
 	if (config.experimentalTreeSitter) {
 		try {
-			connection.console.log("[css-classes-lsp] Initializing tree-sitter (experimental)...");
+			connection.console.log(
+				"[css-classes-lsp] Initializing tree-sitter (experimental)...",
+			);
 			await initTreeSitter();
 			await preloadGrammars();
-			connection.console.log("[css-classes-lsp] Tree-sitter initialized successfully.");
+			connection.console.log(
+				"[css-classes-lsp] Tree-sitter initialized successfully.",
+			);
 		} catch (err) {
 			connection.console.error(
 				`[css-classes-lsp] Tree-sitter initialization failed, falling back to regex parsers: ${err}`,
@@ -195,9 +260,7 @@ connection.onInitialized(async () => {
 
 	// Initial indexing
 	if (workspaceRoot) {
-		connection.console.log(
-			"[css-classes-lsp] Starting workspace indexing...",
-		);
+		connection.console.log("[css-classes-lsp] Starting workspace indexing...");
 		await safeIndexWorkspace();
 	}
 });
@@ -218,13 +281,21 @@ connection.onDidChangeConfiguration(
 				return;
 			}
 
+			const cssExtensionsChanged =
+				JSON.stringify(newConfig.extensions.css) !==
+				JSON.stringify(config.extensions.css);
+
 			config = newConfig;
 			classIndex.updateConfig(config);
 
+			// Keep the watched-file registration in sync with the configured
+			// stylesheet extensions.
+			if (cssExtensionsChanged) {
+				await registerCssFileWatchers();
+			}
+
 			// Re-index with new config
-			connection.console.log(
-				"[css-classes-lsp] Config changed, re-indexing...",
-			);
+			connection.console.log("[css-classes-lsp] Config changed, re-indexing...");
 			await safeIndexWorkspace();
 		}
 	},
@@ -232,27 +303,58 @@ connection.onDidChangeConfiguration(
 
 // ─── File Events ─────────────────────────────────────────────────────────────
 
-connection.onDidChangeWatchedFiles(
-	async (params: DidChangeWatchedFilesParams) => {
-		for (const change of params.changes) {
-			const filePath = URI.parse(change.uri).fsPath;
+/**
+ * Debounced batch processing of watched-file events.
+ *
+ * Without debouncing, a burst of events (e.g. a git checkout touching hundreds
+ * of stylesheets) triggered one index pass AND one diagnostics republish for
+ * every open document per event — O(events × openDocs). Coalescing the burst
+ * into a single pass makes it O(events + openDocs).
+ */
+const WATCH_DEBOUNCE_MS = 150;
+const pendingWatchChanges = new Map<string, FileChangeType>();
+let watchFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-			if (change.type === FileChangeType.Deleted) {
+connection.onDidChangeWatchedFiles((params: DidChangeWatchedFilesParams) => {
+	for (const change of params.changes) {
+		const filePath = URI.parse(change.uri).fsPath;
+		// Last event wins. A delete followed by a recreate (git checkout,
+		// branch switch, atomic-save via temp+rename) must re-index the new
+		// file — a sticky "Deleted" would silently drop it. And if the file
+		// really is gone, indexFile's readFileContent returns null and the
+		// call degrades to a harmless removeFile no-op, so a trailing
+		// Changed can never resurrect a deleted file's stale content.
+		pendingWatchChanges.set(filePath, change.type);
+	}
+	if (watchFlushTimer) clearTimeout(watchFlushTimer);
+	watchFlushTimer = setTimeout(() => {
+		void flushWatchChanges();
+	}, WATCH_DEBOUNCE_MS);
+});
+
+async function flushWatchChanges(): Promise<void> {
+	watchFlushTimer = null;
+	const changes = [...pendingWatchChanges.entries()];
+	pendingWatchChanges.clear();
+
+	await serializeIndex(async () => {
+		for (const [filePath, type] of changes) {
+			if (type === FileChangeType.Deleted) {
 				classIndex.removeFile(filePath);
 			} else {
 				// Created or Changed
 				await classIndex.indexFile(filePath);
 			}
 		}
+	});
 
-		// CSS index changed — refresh diagnostics for all open documents
-		if (indexReady) {
-			for (const doc of documents.all()) {
-				publishDiagnostics(doc);
-			}
+	// CSS index changed — refresh diagnostics for all open documents (once)
+	if (indexReady) {
+		for (const doc of documents.all()) {
+			publishDiagnostics(doc);
 		}
-	},
-);
+	}
+}
 
 // Re-index when documents are saved (covers embedded styles in Vue files etc.)
 documents.onDidSave(async (event) => {
@@ -260,16 +362,18 @@ documents.onDidSave(async (event) => {
 	const lang = getFileLanguage(filePath, config);
 	let indexChanged = false;
 
-	if (lang === "css") {
-		await classIndex.indexFile(filePath, event.document.getText());
-		indexChanged = true;
-	} else if (lang === "vue" || lang === "html") {
-		if (config.searchEmbeddedStyles) {
-			classIndex.removeFile(filePath);
-			await classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+	await serializeIndex(async () => {
+		if (lang === "css") {
+			await classIndex.indexFile(filePath, event.document.getText());
 			indexChanged = true;
+		} else if (lang === "vue" || lang === "html") {
+			if (config.searchEmbeddedStyles) {
+				classIndex.removeFile(filePath);
+				await classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+				indexChanged = true;
+			}
 		}
-	}
+	});
 
 	// If the CSS index changed, refresh diagnostics for all open documents;
 	// otherwise just update diagnostics for the saved document.
@@ -284,39 +388,41 @@ documents.onDidSave(async (event) => {
 
 // ─── Go to Definition ────────────────────────────────────────────────────────
 
-connection.onDefinition(async (params: DefinitionParams): Promise<Location[] | null> => {
-	if (!await waitForIndex()) return null;
+connection.onDefinition(
+	async (params: DefinitionParams): Promise<Location[] | null> => {
+		if (!(await waitForIndex())) return null;
 
-	const doc = documents.get(params.textDocument.uri);
-	if (!doc) return null;
+		const doc = documents.get(params.textDocument.uri);
+		if (!doc) return null;
 
-	const filePath = URI.parse(doc.uri).fsPath;
-	const content = doc.getText();
+		const filePath = URI.parse(doc.uri).fsPath;
+		const content = doc.getText();
 
-	const result = getDefinition(
-		content,
-		filePath,
-		params.position.line,
-		params.position.character,
-		classIndex,
-		config,
-	);
+		const result = getDefinition(
+			content,
+			filePath,
+			params.position.line,
+			params.position.character,
+			classIndex,
+			config,
+		);
 
-	if (!result) return null;
+		if (!result) return null;
 
-	return result.definitions.map((def) => ({
-		uri: URI.file(def.filePath).toString(),
-		range: Range.create(
-			Position.create(def.line, def.column),
-			Position.create(def.endLine, def.endColumn),
-		),
-	}));
-});
+		return result.definitions.map((def) => ({
+			uri: URI.file(def.filePath).toString(),
+			range: Range.create(
+				Position.create(def.line, def.column),
+				Position.create(def.endLine, def.endColumn),
+			),
+		}));
+	},
+);
 
 // ─── Hover ───────────────────────────────────────────────────────────────────
 
 connection.onHover(async (params: HoverParams) => {
-	if (!await waitForIndex()) return null;
+	if (!(await waitForIndex())) return null;
 
 	const doc = documents.get(params.textDocument.uri);
 	if (!doc) return null;
@@ -349,40 +455,42 @@ connection.onHover(async (params: HoverParams) => {
 
 // ─── Completion ──────────────────────────────────────────────────────────────
 
-connection.onCompletion(async (params: CompletionParams): Promise<LSPCompletionItem[]> => {
-	if (!await waitForIndex()) return [];
+connection.onCompletion(
+	async (params: CompletionParams): Promise<LSPCompletionItem[]> => {
+		if (!(await waitForIndex())) return [];
 
-	const doc = documents.get(params.textDocument.uri);
-	if (!doc) return [];
+		const doc = documents.get(params.textDocument.uri);
+		if (!doc) return [];
 
-	// Get the text before the cursor to determine the prefix
-	const line = doc.getText({
-		start: Position.create(params.position.line, 0),
-		end: params.position,
-	});
+		// Get the text before the cursor to determine the prefix
+		const line = doc.getText({
+			start: Position.create(params.position.line, 0),
+			end: params.position,
+		});
 
-	// Check if we're in a class context
-	const classContext = detectClassContext(line);
-	if (!classContext) return [];
+		// Check if we're in a class context
+		const classContext = detectClassContext(line);
+		if (!classContext) return [];
 
-	const items = getCompletions(classContext.prefix, classIndex);
+		const items = getCompletions(classContext.prefix, classIndex);
 
-	return items.map((item, idx) => ({
-		label: item.label,
-		kind: CompletionItemKind.Value,
-		detail: item.detail,
-		documentation: item.documentation
-			? { kind: MarkupKind.PlainText, value: item.documentation }
-			: undefined,
-		sortText: String(idx).padStart(5, "0"),
-	}));
-});
+		return items.map((item, idx) => ({
+			label: item.label,
+			kind: CompletionItemKind.Value,
+			detail: item.detail,
+			documentation: item.documentation
+				? { kind: MarkupKind.PlainText, value: item.documentation }
+				: undefined,
+			sortText: String(idx).padStart(5, "0"),
+		}));
+	},
+);
 
 // ─── References ──────────────────────────────────────────────────────────────
 
 connection.onReferences(
 	async (params: ReferenceParams): Promise<Location[] | null> => {
-		if (!await waitForIndex() || !workspaceRoot) return null;
+		if (!(await waitForIndex()) || !workspaceRoot) return null;
 
 		const doc = documents.get(params.textDocument.uri);
 		if (!doc) return null;
@@ -432,7 +540,7 @@ connection.onReferences(
 
 connection.onWorkspaceSymbol(
 	async (params: WorkspaceSymbolParams): Promise<SymbolInformation[]> => {
-		if (!await waitForIndex()) return [];
+		if (!(await waitForIndex())) return [];
 
 		const symbols = getWorkspaceSymbols(params.query, classIndex);
 
@@ -455,7 +563,7 @@ connection.onWorkspaceSymbol(
 
 connection.onPrepareRename(
 	async (params: PrepareRenameParams): Promise<Range | null> => {
-		if (!await waitForIndex()) return null;
+		if (!(await waitForIndex())) return null;
 
 		const doc = documents.get(params.textDocument.uri);
 		if (!doc) return null;
@@ -483,7 +591,7 @@ connection.onPrepareRename(
 
 connection.onRenameRequest(
 	async (params: RenameParams): Promise<WorkspaceEdit | null> => {
-		if (!await waitForIndex() || !workspaceRoot) return null;
+		if (!(await waitForIndex()) || !workspaceRoot) return null;
 
 		const doc = documents.get(params.textDocument.uri);
 		if (!doc) return null;
@@ -620,9 +728,15 @@ documents.onDidOpen(async (event) => {
 	const lang = getFileLanguage(filePath, config);
 
 	// Index embedded <style> blocks from Vue/HTML files on open
-	if ((lang === "vue" || lang === "html") && config.searchEmbeddedStyles && indexReady) {
-		classIndex.removeFile(filePath);
-		await classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+	if (
+		(lang === "vue" || lang === "html") &&
+		config.searchEmbeddedStyles &&
+		indexReady
+	) {
+		await serializeIndex(async () => {
+			classIndex.removeFile(filePath);
+			await classIndex.indexEmbeddedStyles(filePath, event.document.getText());
+		});
 	}
 
 	publishDiagnostics(event.document);
@@ -673,9 +787,7 @@ function detectClassContext(lineBeforeCursor: string): ClassContext | null {
 	}
 
 	// CSS Modules: styles['foo-|  or styles.foo|
-	const modulesBracketMatch = lineBeforeCursor.match(
-		/\bstyles\[['"]([^'"]*$)/i,
-	);
+	const modulesBracketMatch = lineBeforeCursor.match(/\bstyles\[['"]([^'"]*$)/i);
 	if (modulesBracketMatch) {
 		return { prefix: modulesBracketMatch[1] };
 	}

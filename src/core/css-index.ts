@@ -1,7 +1,22 @@
-import type { CssClassDefinition, CssClassesConfig, ScssDirectives, ScssMixin, ScssExtend, ScssInclude } from "../types.js";
-import { parseCssClasses, extractStyleBlocks, parseScssDirectives } from "../parsers/css-parser.js";
+import type {
+  CssClassDefinition,
+  CssClassesConfig,
+  ScssDirectives,
+  ScssMixin,
+  ScssExtend,
+  ScssInclude,
+} from "../types.js";
+import {
+  parseCssClasses,
+  extractStyleBlocks,
+  parseScssDirectives,
+} from "../parsers/css-parser.js";
 import { tsParseCssClasses } from "../parsers/treesitter/index.js";
-import { scanWorkspace, scanTemplateFiles, readFileContent } from "../scanner/workspace-scanner.js";
+import {
+  scanWorkspace,
+  scanTemplateFiles,
+  readFileContent,
+} from "../scanner/workspace-scanner.js";
 import { resolveFileImports } from "./import-resolver.js";
 import { findSourceMap, resolveOriginalPosition } from "../utils/sourcemap.js";
 
@@ -107,7 +122,8 @@ export class CssClassIndex {
     filePath: string,
     langHint?: string,
   ): Promise<CssClassDefinition[]> {
-    const isScss = langHint === "scss" || langHint === "sass" || filePath.endsWith(".scss");
+    const isScss =
+      langHint === "scss" || langHint === "sass" || filePath.endsWith(".scss");
     if (this.config.experimentalTreeSitter && !isScss) {
       try {
         return await tsParseCssClasses(content, filePath, this.config);
@@ -136,7 +152,12 @@ export class CssClassIndex {
     const results = await Promise.all(
       files.map(async (filePath) => {
         const content = await readFileContent(filePath);
-        if (!content) return { classes: [] as CssClassDefinition[], content: null, filePath };
+        if (!content)
+          return {
+            classes: [] as CssClassDefinition[],
+            content: null,
+            filePath,
+          };
         const classes = await this.parseClasses(content, filePath);
         return { classes, content, filePath };
       }),
@@ -162,7 +183,9 @@ export class CssClassIndex {
         batch.map(async ({ filePath, content }) => {
           const imports = await resolveFileImports(content, filePath);
           return imports
-            .filter((imp) => imp.resolvedPath && !indexedPaths.has(imp.resolvedPath))
+            .filter(
+              (imp) => imp.resolvedPath && !indexedPaths.has(imp.resolvedPath),
+            )
             .map((imp) => imp.resolvedPath!);
         }),
       );
@@ -190,8 +213,9 @@ export class CssClassIndex {
       await Promise.all(
         templateFiles.map(async (filePath) => {
           const content = await readFileContent(filePath);
-          if (!content) return;
-          await this.indexEmbeddedStyles(filePath, content);
+          return content
+            ? this.indexEmbeddedStyles(filePath, content)
+            : undefined;
         }),
       );
     }
@@ -230,6 +254,10 @@ export class CssClassIndex {
             column: original.originalColumn,
             endLine: original.originalLine,
             endColumn: original.originalColumn + def.className.length,
+            // Remember that this definition came from indexing `filePath` so it
+            // can be removed again even though its filePath now points at the
+            // remapped original source.
+            indexedFrom: filePath,
           });
           continue;
         }
@@ -245,7 +273,11 @@ export class CssClassIndex {
   async indexEmbeddedStyles(filePath: string, content: string): Promise<void> {
     const blocks = extractStyleBlocks(content);
     for (const block of blocks) {
-      const classes = await this.parseClasses(block.content, filePath, block.lang);
+      const classes = await this.parseClasses(
+        block.content,
+        filePath,
+        block.lang,
+      );
       for (const def of classes) {
         // Adjust line numbers for the style block offset
         this.addDefinition({
@@ -266,7 +298,12 @@ export class CssClassIndex {
       for (const className of classNames) {
         const defs = this.index.get(className);
         if (defs) {
-          const filtered = defs.filter((d) => d.filePath !== filePath);
+          // Match on the file that was *indexed* (indexedFrom), not the
+          // possibly source-map-remapped def.filePath, so remapped definitions
+          // are removed correctly when the compiled file changes/deletes.
+          const filtered = defs.filter(
+            (d) => (d.indexedFrom ?? d.filePath) !== filePath,
+          );
           if (filtered.length > 0) {
             this.index.set(className, filtered);
           } else {
@@ -288,9 +325,12 @@ export class CssClassIndex {
     existing.push(def);
     this.index.set(def.className, existing);
 
-    const fileClasses = this.fileIndex.get(def.filePath) ?? new Set();
+    // Key the per-file index by the file that was indexed (indexedFrom), not the
+    // possibly source-map-remapped def.filePath.
+    const owner = def.indexedFrom ?? def.filePath;
+    const fileClasses = this.fileIndex.get(owner) ?? new Set();
     fileClasses.add(def.className);
-    this.fileIndex.set(def.filePath, fileClasses);
+    this.fileIndex.set(owner, fileClasses);
   }
 
   /**
