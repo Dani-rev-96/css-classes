@@ -1,5 +1,9 @@
 import type { CssClassReference } from "../types.js";
 import { parseHtmlClasses } from "./html-parser.js";
+import { windowsHtmlClasses } from "./html-windows-Microsoft.js";
+import { windows } from "./windows-Microsoft.js";
+
+
 
 /**
  * Parse Vue template content and extract class references.
